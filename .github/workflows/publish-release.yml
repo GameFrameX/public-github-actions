@@ -83,7 +83,12 @@ jobs:
             git commit -m "[修改] 修改版本号为${{ inputs.tag_name }}"
           fi
 
-      - name: Push changes
+      - name: Create and push new tag
+        run: |
+          echo "Creating new tag ${{ inputs.tag_name }} at current commit"
+          git tag -a "${{ inputs.tag_name }}" -m "Release ${{ inputs.tag_name }}"
+
+      - name: Push changes and tags
         run: |
           # 获取默认分支名称
           DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
@@ -104,16 +109,12 @@ jobs:
           
           # 切换到默认分支
           git checkout -B $DEFAULT_BRANCH
+          
+          # 先推送代码变更
           git push origin $DEFAULT_BRANCH --force
           
-          # 推送标签
-          git push origin --tags --force
-
-      - name: Create and push new tag
-        run: |
-          echo "Creating new tag ${{ inputs.tag_name }} at current commit"
-          git tag -a "${{ inputs.tag_name }}" -m "Release ${{ inputs.tag_name }}"
-          git push origin "${{ inputs.tag_name }}"
+          # 再推送新创建的标签
+          git push origin "${{ inputs.tag_name }}" --force
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
