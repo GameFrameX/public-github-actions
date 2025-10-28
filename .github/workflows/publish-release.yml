@@ -58,14 +58,25 @@ jobs:
             git commit -m "[修改] 修改更新日志"
           fi
 
-      # - name: Change version by tag
-      #   uses: AlianBlank/github-action-tag-version@1.1.0
-      #   with:
-      #     version: ${{ inputs.tag_name }}
+      - name: Update package.json version
+        run: |
+          # 检查 package.json 是否存在
+          if [ -f "package.json" ]; then
+            echo "Found package.json, updating version to ${{ inputs.tag_name }}"
+            
+            # 使用 jq 更新 package.json 中的 version 字段
+            jq '.version = "${{ inputs.tag_name }}"' package.json > package.json.tmp
+            mv package.json.tmp package.json
+            
+            echo "Updated package.json version to ${{ inputs.tag_name }}"
+            cat package.json | jq '.version'
+          else
+            echo "package.json not found, skipping version update"
+          fi
 
       - name: Commit version changes
         run: |
-          git add .
+          git add package.json
           if git diff --staged --quiet; then
             echo "No version changes to commit"
           else
