@@ -34,6 +34,16 @@ jobs:
           git config --global user.email "${{ vars.GIT_USER_EMAIL }}"
           git config --global user.name "${{ vars.GIT_USER_NAME }}"
 
+      - name: Delete existing tag (if exists)
+        run: |
+          if git tag -l "${{ inputs.tag_name }}" | grep -q "${{ inputs.tag_name }}"; then
+            echo "Deleting existing tag ${{ inputs.tag_name }}"
+            git tag -d "${{ inputs.tag_name }}"
+            git push origin --delete "${{ inputs.tag_name }}" || echo "Remote tag does not exist"
+          else
+            echo "Tag ${{ inputs.tag_name }} does not exist locally"
+          fi
+
       - name: "✏️ Generate release changelog"
         uses: heinrichreimer/action-github-changelog-generator@v2.3
         with:
@@ -48,11 +58,10 @@ jobs:
             git commit -m "[修改] 修改更新日志"
           fi
 
-      - name: Change version by tag
-        continue-on-error: true
-        uses: AlianBlank/github-action-tag-version@1.1.0
-        with:
-          version: ${{ inputs.tag_name }}
+      # - name: Change version by tag
+      #   uses: AlianBlank/github-action-tag-version@1.1.0
+      #   with:
+      #     version: ${{ inputs.tag_name }}
 
       - name: Commit version changes
         run: |
@@ -66,8 +75,16 @@ jobs:
       - name: Push changes
         uses: ad-m/github-push-action@master
         with:
-          force: true
-          tags: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
+          force_with_lease: true
+          tags: false
+
+      - name: Create and push new tag
+        run: |
+          echo "Creating new tag ${{ inputs.tag_name }} at current commit"
+          git tag -a "${{ inputs.tag_name }}" -m "Release ${{ inputs.tag_name }}"
+          git push origin "${{ inputs.tag_name }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
