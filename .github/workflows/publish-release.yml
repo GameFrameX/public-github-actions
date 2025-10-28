@@ -15,11 +15,8 @@ on:
 # 统一配置权限，调用方无需声明
 permissions:
   contents: write
-  pull-requests: write
   actions: read
-  metadata: read
   checks: write
-  issues: write
   packages: write
 
 jobs:
