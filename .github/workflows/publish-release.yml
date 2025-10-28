@@ -134,9 +134,3 @@ jobs:
           draft: false
           prerelease: false
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Trigger Sync Workflow
-        uses: ./.github/workflows/sync.yml
-        with:
-          target_branch: ${{ github.ref_name }}
-          repository_name: ${{ inputs.repository_name }}
