@@ -1,0 +1,59 @@
+# 这个文件应该放在外部仓库的 .github/workflows/ 目录下
+
+name: Reusable Sync to Gitee Workflow
+
+on:
+  workflow_call:
+    inputs:
+      target_branch:
+        description: '目标分支名称'
+        required: true
+        type: string
+      repository_name:
+        description: '仓库名称 (格式: owner/repo)'
+        required: true
+        type: string
+
+jobs:
+  sync-to-gitee:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取所有提交历史
+
+      - name: Set up Git user
+        run: |
+          git config --global user.email "${{ vars.GIT_USER_EMAIL }}"
+          git config --global user.name "${{ vars.GIT_USER_NAME }}"
+
+      - name: Set SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.GITEE_SSH_KEY }}" >> ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          eval $(ssh-agent -s) && ssh-add ~/.ssh/id_rsa
+          # 信任域名
+          ssh-keyscan -H ${{ vars.GITEE_DOMAIN_URL }} >> ~/.ssh/known_hosts
+
+      - name: Check current branch
+        run: echo "当前分支：${{ inputs.target_branch }} ${{ inputs.repository_name }}"
+
+      - name: Echo git url
+        run: echo "git@${{ vars.GITEE_DOMAIN_URL }}:${{ inputs.repository_name }}.git"
+
+      - name: Add remote url
+        run: git remote add mirror "git@${{ vars.GITEE_DOMAIN_URL }}:${{ inputs.repository_name }}.git"
+
+      - name: Fetch
+        run: git fetch --prune mirror --tags --verbose
+
+      - name: Pull and push
+        run: | 
+          if [ "${{ inputs.target_branch }}" ]; then
+            git checkout ${{ inputs.target_branch }}
+            git push -f mirror ${{ inputs.target_branch }}
+            git push -f mirror --tags --verbose
+          fi
