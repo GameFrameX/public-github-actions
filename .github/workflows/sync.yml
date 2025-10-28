@@ -32,7 +32,7 @@ jobs:
       - name: Set SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.GITEE_SSH_KEY }}" >> ~/.ssh/id_rsa
+          echo "${{ secrets.GITEE_ID_RSA }}" >> ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           eval $(ssh-agent -s) && ssh-add ~/.ssh/id_rsa
           # 信任域名
