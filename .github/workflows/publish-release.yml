@@ -45,7 +45,7 @@ jobs:
           node-version: "lts/*"
 
       - name: Install Dependencies
-        run: npm install
+        run: npm install --only=dev
 
       # 新增步骤：下载远程配置
       - name: Download shared configuration
