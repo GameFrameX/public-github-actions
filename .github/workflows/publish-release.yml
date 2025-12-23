@@ -47,6 +47,12 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
+      # 新增步骤：下载远程配置
+      - name: Download shared configuration
+        run: |
+          curl -L https://raw.githubusercontent.com/GameFrameX/public-github-actions/main/.releaserc -o .releaserc
+
+      # 修复包配置
       - name: fix package
         run: npm pkg fix
 
