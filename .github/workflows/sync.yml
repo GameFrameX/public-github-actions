@@ -58,36 +58,36 @@ jobs:
             git push -f mirror --tags --verbose
           fi
 
-  sync-to-cnb:
-    runs-on: ubuntu-latest
+  # sync-to-cnb:
+  #   runs-on: ubuntu-latest
     
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # 获取所有提交历史
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 0 # 获取所有提交历史
 
-      - name: Set up Git user
-        run: |
-          git config --global user.email "${{ vars.GIT_USER_EMAIL }}"
-          git config --global user.name "${{ vars.GIT_USER_NAME }}"
+  #     - name: Set up Git user
+  #       run: |
+  #         git config --global user.email "${{ vars.GIT_USER_EMAIL }}"
+  #         git config --global user.name "${{ vars.GIT_USER_NAME }}"
       
-      - name: Check current branch
-        run: echo "当前分支：${{ inputs.target_branch }} ${{ inputs.repository_name }}"
+  #     - name: Check current branch
+  #       run: echo "当前分支：${{ inputs.target_branch }} ${{ inputs.repository_name }}"
 
-      - name: Echo git url
-        run: echo "https://***@${{ vars.CNB_DOMAIN_URL }}/${{ inputs.repository_name }}"
+  #     - name: Echo git url
+  #       run: echo "https://***@${{ vars.CNB_DOMAIN_URL }}/${{ inputs.repository_name }}"
 
-      - name: Add remote url
-        run: git remote add mirror "https://${{ secrets.CNB_TOKEN }}@${{ vars.CNB_DOMAIN_URL }}/${{ inputs.repository_name }}"
+  #     - name: Add remote url
+  #       run: git remote add mirror "https://${{ secrets.CNB_TOKEN }}@${{ vars.CNB_DOMAIN_URL }}/${{ inputs.repository_name }}"
 
-      - name: Fetch
-        run: git fetch --prune mirror --tags --verbose
+  #     - name: Fetch
+  #       run: git fetch --prune mirror --tags --verbose
 
-      - name: Pull and push
-        run: | 
-          if [ "${{ inputs.target_branch }}" ]; then
-            git checkout ${{ inputs.target_branch }}
-            git push -f mirror ${{ inputs.target_branch }}
-            git push -f mirror --tags --verbose
-          fi
+  #     - name: Pull and push
+  #       run: | 
+  #         if [ "${{ inputs.target_branch }}" ]; then
+  #           git checkout ${{ inputs.target_branch }}
+  #           git push -f mirror ${{ inputs.target_branch }}
+  #           git push -f mirror --tags --verbose
+  #         fi
