@@ -35,103 +35,26 @@ jobs:
           git config --global user.email "${{ vars.GIT_USER_EMAIL }}"
           git config --global user.name "${{ vars.GIT_USER_NAME }}"
 
-      - name: Delete existing tag (if exists)
-        run: |
-          if git tag -l "${{ inputs.tag_name }}" | grep -q "${{ inputs.tag_name }}"; then
-            echo "Deleting existing tag ${{ inputs.tag_name }}"
-            git tag -d "${{ inputs.tag_name }}"
-            git push origin --delete "${{ inputs.tag_name }}" || echo "Remote tag does not exist"
-          else
-            echo "Tag ${{ inputs.tag_name }} does not exist locally"
-          fi
+      # 解决 git fetch 报错
+      - name: Force fetch tags
+        run: git fetch --tags --force
 
-      - name: "✏️ Generate release changelog"
-        uses: heinrichreimer/action-github-changelog-generator@v2.3
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          node-version: "lts/*"
 
-      - name: Commit CHANGELOG.md
-        run: |
-          git add CHANGELOG.md
-          if git diff --staged --quiet; then
-            echo "No changes to commit for CHANGELOG.md"
-          else
-            git commit -m "[修改] 修改更新日志"
-          fi
+      - name: Install Dependencies
+        run: npm install
 
-      - name: Update package.json version
-        run: |
-          # 检查 package.json 是否存在
-          if [ -f "package.json" ]; then
-            echo "Found package.json, updating version to ${{ inputs.tag_name }}"
-            
-            # 使用 jq 更新 package.json 中的 version 字段
-            jq '.version = "${{ inputs.tag_name }}"' package.json > package.json.tmp
-            mv package.json.tmp package.json
-            
-            echo "Updated package.json version to ${{ inputs.tag_name }}"
-            cat package.json | jq '.version'
-          else
-            echo "package.json not found, skipping version update"
-          fi
+      - name: fix package
+        run: npm pkg fix
 
-      - name: Commit version changes
-        run: |
-          git add package.json
-          if git diff --staged --quiet; then
-            echo "No version changes to commit"
-          else
-            git commit -m "[修改] 修改版本号为${{ inputs.tag_name }}"
-          fi
-
-      - name: Create and push new tag
-        run: |
-          echo "Creating new tag ${{ inputs.tag_name }} at current commit"
-          git tag -a "${{ inputs.tag_name }}" -m "Release ${{ inputs.tag_name }}"
-
-      - name: Push changes and tags
-        run: |
-          # 获取默认分支名称
-          DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
-          echo "Default branch: $DEFAULT_BRANCH"
-          
-          # 如果无法获取默认分支，尝试常见的分支名
-          if [ -z "$DEFAULT_BRANCH" ]; then
-            if git show-ref --verify --quiet refs/remotes/origin/main; then
-              DEFAULT_BRANCH="main"
-            elif git show-ref --verify --quiet refs/remotes/origin/master; then
-              DEFAULT_BRANCH="master"
-            else
-              DEFAULT_BRANCH="main"  # 默认使用 main
-            fi
-          fi
-          
-          echo "Using branch: $DEFAULT_BRANCH"
-          
-          # 切换到默认分支
-          git checkout -B $DEFAULT_BRANCH
-          
-          # 先推送代码变更
-          git push origin $DEFAULT_BRANCH --force
-          
-          # 再推送新创建的标签
-          git push origin "${{ inputs.tag_name }}" --force
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ inputs.tag_name }}
-          name: Release ${{ inputs.tag_name }}
-          body: |
-            ## 🎉 Release ${{ inputs.tag_name }}
-            
-            This release was automatically generated from tag `${{ inputs.tag_name }}`.
-            
-            ### 📋 Changes
-            Please check the [CHANGELOG.md](./CHANGELOG.md) for detailed changes.
-            
-            ### 📦 Repository
-            Repository: ${{ inputs.repository_name }}
-          draft: false
-          prerelease: false
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run semantic-release
+        run: npx semantic-release
+        env:
+          # cnb.cool 发布令牌
+          NPM_TOKEN: ${{ secrets.CNB_NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.CNB_NPM_TOKEN }}
+          # GitHub令牌（自动生成，用于创建Tag/Release）
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
