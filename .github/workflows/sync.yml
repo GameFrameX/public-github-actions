@@ -76,10 +76,10 @@ jobs:
         run: echo "当前分支：${{ inputs.target_branch }} ${{ inputs.repository_name }}"
 
       - name: Echo git url
-        run: echo "https://***@${{ vars.CNB_DOMAIN_URL }}/${{ inputs.repository_name }}.git"
+        run: echo "https://***@${{ vars.CNB_DOMAIN_URL }}/${{ inputs.repository_name }}"
 
       - name: Add remote url
-        run: git remote add mirror "https://${{ secrets.CNB_TOKEN }}@${{ vars.CNB_DOMAIN_URL }}/${{ inputs.repository_name }}.git"
+        run: git remote add mirror "https://${{ secrets.CNB_TOKEN }}@${{ vars.CNB_DOMAIN_URL }}/${{ inputs.repository_name }}"
 
       - name: Fetch
         run: git fetch --prune mirror --tags --verbose
