@@ -45,7 +45,15 @@ jobs:
           node-version: "lts/*"
 
       - name: Install Dependencies
-        run: npm install --no-save --omit=dev
+        run: |
+          # 备份 package.json
+          cp package.json package.json.bak
+          # 临时移除 dependencies 以避免 npm 尝试安装不存在的 Unity 依赖
+          node -e "let pkg=require('./package.json'); delete pkg.dependencies; require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2))"
+          # 安装开发依赖
+          npm install
+          # 恢复原始 package.json (确保发布时包含 dependencies)
+          mv package.json.bak package.json
 
       # 新增步骤：下载远程配置
       - name: Download shared configuration
