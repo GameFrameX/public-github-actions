@@ -75,3 +75,4 @@ jobs:
           PLUGIN_PASSWORD: ${{ secrets.CNB_TOKEN }}
           PLUGIN_FORCE: "true"
           PLUGIN_SYNC_MODE: "rebase"
+          PLUGIN_PUSH_TAGS: "true"
