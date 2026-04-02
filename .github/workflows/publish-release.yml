@@ -25,7 +25,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # 获取所有提交历史，用于生成完整的changelog
           persist-credentials: false # 使用 token 进行操作
