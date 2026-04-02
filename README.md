@@ -19,7 +19,7 @@
 |----|------|------------------|---------------------|
 | [`.github/workflows/release.yml`](.github/workflows/release.yml) | 自动打 Tag、生成 ChangeLog、创建 GitHub Release | 无（自动读取 `package.json` 中的版本） | `GITHUB_TOKEN`（默认已注入） |
 | [`.github/workflows/publish-release.yml`](.github/workflows/publish-release.yml) | 可手动指定 Tag 发布，支持 Unity 项目依赖优化 | `tag_name`, `repository_name` | `GITHUB_TOKEN` |
-| [`.github/workflows/sync.yml`](.github/workflows/sync.yml) | **双 Job 同步**：<br>① `sync-to-gitee`（SSH 密钥）<br>② `sync-to-cnb`（GPG 解密令牌 + HTTPS） | `target_branch`, `repository_name`<br>可选 `cnb_repository_name` | **Gitee**（SSH 模式）：<br>`GITEE_ID_RSA`<br>**CNB**（GPG 模式）：<br>`CNB_GPG_PRIVATE_KEY`<br>`CNB_TOKEN_GPG`<br>`CNB_GPG_PASSPHRASE`（可选） |
+| [`.github/workflows/sync.yml`](.github/workflows/sync.yml) | **双 Job 同步**：<br>① `sync-to-gitee`（SSH 密钥）<br>② `sync-to-cnb`（Docker Action + HTTPS） | `target_branch`, `repository_name` | **Gitee**（SSH 模式）：<br>`GITEE_ID_RSA`<br>**CNB**（Token 模式）：<br>`CNB_TOKEN` |
 
 ---
 
@@ -56,7 +56,7 @@ jobs:
     secrets: inherit   # 需提前在组织/仓库设置 GITEE_ID_RSA
 ```
 
-### 3. 同步到 CNB（GPG 解密令牌）
+### 3. 同步到 CNB（Token 模式）
 
 ```yaml
 name: Mirror-CNB
@@ -70,11 +70,8 @@ jobs:
     with:
       target_branch: main
       repository_name: owner/repo
-      cnb_repository_name: owner/cnb-repo   # 可省略，默认同 repository_name
     secrets:
-      CNB_GPG_PRIVATE_KEY: ${{ secrets.CNB_GPG_PRIVATE_KEY }}
-      CNB_TOKEN_GPG:         ${{ secrets.CNB_TOKEN_GPG }}
-      CNB_GPG_PASSPHRASE:    ${{ secrets.CNB_GPG_PASSPHRASE }}
+      CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
 ```
 
 ---
@@ -87,24 +84,9 @@ jobs:
 3. 在 GitHub **Settings → Secrets and variables → Actions** 新建 `GITEE_ID_RSA`，粘贴完整私钥内容
 4. 在 **Variables** 新建 `GITEE_DOMAIN_URL`（如 `gitee.com`）
 
-### CNB GPG 模式
-1. 本地生成 GPG 密钥对：`gpg --full-generate-key`
-2. 导出公钥并上传到 CNB 账户「GPG 公钥」
-3. 导出私钥：
-   ```bash
-   gpg --armor --export-secret-keys <key-id> > private.asc
-   ```
-4. 用公钥加密你的 **Personal Access Token**：
-   ```bash
-   echo -n '你的Token' | gpg --armor --encrypt -r <key-id> > token.asc
-   ```
-5. 在 GitHub Secrets 新建：
-   - `CNB_GPG_PRIVATE_KEY`：粘贴 `private.asc` 内容
-   - `CNB_TOKEN_GPG`：粘贴 `token.asc` 内容
-   - `CNB_GPG_PASSPHRASE`（可选）：私钥口令
-6. 在 Variables 新建：
-   - `CNB_DOMAIN_URL`（如 `codechina.csdn.net`）
-   - `CNB_USERNAME`：你的 CNB 用户名
+### CNB Token 模式
+1. 在 CNB 平台生成 **Personal Access Token**
+2. 在 GitHub **Settings → Secrets and variables → Actions** 新建 `CNB_TOKEN`，粘贴 Token 内容
 
 ---
 
@@ -114,11 +96,11 @@ jobs:
 
 | 步骤 | 关键脚本/动作 | 实现要点 |
 |----|-------------|---------|
-| 检出代码 | `actions/checkout@v4` | `fetch-depth: 0` 保证拿到完整历史，`persist-credentials: false` 强制使用 `GITHUB_TOKEN` 做后续推送，避免权限叠加 |
+| 检出代码 | `actions/checkout@v6` | `fetch-depth: 0` 保证拿到完整历史，`persist-credentials: false` 强制使用 `GITHUB_TOKEN` 做后续推送，避免权限叠加 |
 | 强制拉取标签 | `git fetch --tags --force` | 解决本地与远端标签冲突导致的 "would clobber existing tag" 报错 |
 | 安装依赖 | `npm install` | 临时删除 `package.json` 中的 `dependencies` 字段，防止 npm 尝试安装不存在的 Unity 私有依赖；安装完毕再还原文件，保证发布时仍携带依赖声明 |
 | 下载共享配置 | `curl -L https://raw.githubusercontent.com/GameFrameX/public-github-actions/main/.releaserc -o .releaserc` | 统一集中管理 `semantic-release` 配置，调用方无需在每个仓库维护 `.releaserc` |
-| 语义化发布 | `npx semantic-release` | 按 `.releaserc` 定义执行：<br>① 分析提交 → ② 生成 Release Notes → ③ 打 Tag → ④ 生成/更新 `CHANGELOG.md` → ⑤ 推送到 GitHub Releases → ⑥ 发布到 npm（`CNB_NPM_TOKEN`） |
+| 语义化发布 | `npx semantic-release` | 按 `.releaserc` 定义执行：<br>① 分析提交 → ② 生成 Release Notes → ③ 打 Tag → ④ 生成/更新 `CHANGELOG.md` → ⑤ 推送到 GitHub Releases → ⑥ 发布到 cnb.cool npm（`CNB_NPM_TOKEN`） |
 
 > 权限声明：`contents: write`（写标签/Release）、`packages: write`（发布 npm）、`checks: write`（状态回写）
 
@@ -130,22 +112,22 @@ jobs:
 
 | 步骤 | 关键脚本/动作 | 实现要点 |
 |----|-------------|---------|
-| 条件判断 | `if: ${{ secrets.GITEE_ID_RSA != '' }}` | 未提供密钥时整 Job 静默跳过，不影响 CI 结果 |
+| 检出代码 | `actions/checkout@v6` | `fetch-depth: 0` 获取完整历史 |
 | 注入 SSH 私钥 | `echo "$GITEE_ID_RSA" > ~/.ssh/id_rsa` | 600 权限 + `ssh-agent` 加载，私钥不落盘 |
 | 信任域名 | `ssh-keyscan -H $GITEE_DOMAIN_URL >> ~/.ssh/known_hosts` | 防止首次连接出现 "Are you sure you want to continue connecting" 中断 |
 | 添加远端 | `git remote add mirror git@$GITEE_DOMAIN_URL:$repository_name.git` | 使用 SSH 格式，免账号密码 |
 | 强制推送 | `git push -f mirror $branch --tags` | 保持与 GitHub 完全一致的分支与标签映射 |
 
-#### Job② sync-to-cnb（GPG + HTTPS 模式）
+#### Job② sync-to-cnb（Docker Action 模式）
 
-| 阶段 | 关键脚本/动作 | 实现要点 |
-|----|-------------|---------|
-| 条件判断 | `if: ${{ secrets.CNB_GPG_PRIVATE_KEY != '' && secrets.CNB_TOKEN_GPG != '' }}` | 两密钥任一缺失即跳过，避免报错 |
-| 导入 GPG 私钥 | `gpg --batch --yes --import < $CNB_GPG_PRIVATE_KEY` | 目录权限 700，防止其他用户读取 |
-| 解密 Token | `gpg --pinentry-mode loopback --passphrase $CNB_GPG_PASSPHRASE --decrypt token.asc` | 支持「有口令/无口令」两种场景；解密后立刻 `::add-mask::` 隐藏明文 |
-| 注入 Basic Auth | `git config --global http.https://$CNB_DOMAIN_URL/.extraheader "AUTHORIZATION: basic $(base64 -w0 $username:$token)"` | 利用 Git 的 `extraheader` 能力，**不把 Token 写入 remote URL**，日志无法泄漏 |
-| 动态仓库名 | `cnb_repository_name` 为空时回落到 `repository_name` | 同一套流程可同时支持「同仓镜像」与「异仓镜像」 |
-| 强制推送 | 同 Job① | 保持分支与标签完全对齐 |
+| 阶段 | 关键配置 | 实现要点 |
+|----|---------|---------|
+| Docker Action | `docker://tencentcom/git-sync` | 使用腾讯云官方镜像同步工具，简化配置 |
+| 目标地址 | `PLUGIN_TARGET_URL: https://cnb.cool/{repo}.git` | 使用 HTTPS 协议，目标仓库地址 |
+| 认证方式 | `PLUGIN_AUTH_TYPE: https` + `PLUGIN_PASSWORD` | Token 认证，安全简洁 |
+| 同步模式 | `PLUGIN_SYNC_MODE: rebase` | 使用 rebase 模式同步，保持提交历史整洁 |
+| 标签同步 | `PLUGIN_PUSH_TAGS: true` | 自动同步所有标签 |
+| 强制推送 | `PLUGIN_FORCE: true` | 覆盖远端不一致的历史 |
 
 > 两 Job 并发执行，互不干扰；调用方通过是否提供对应 Secrets 即可「无感」切换目标平台。
 
