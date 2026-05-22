@@ -20,6 +20,7 @@
 | [`.github/workflows/release.yml`](.github/workflows/release.yml) | 自动打 Tag、生成 ChangeLog、创建 GitHub Release | 无（自动读取 `package.json` 中的版本） | `GITHUB_TOKEN`（默认已注入） |
 | [`.github/workflows/publish-release.yml`](.github/workflows/publish-release.yml) | 可手动指定 Tag 发布，支持 Unity 项目依赖优化 | `tag_name`, `repository_name` | `GITHUB_TOKEN` |
 | [`.github/workflows/sync.yml`](.github/workflows/sync.yml) | **双 Job 同步**：<br>① `sync-to-gitee`（SSH 密钥）<br>② `sync-to-cnb`（Docker Action + HTTPS） | `target_branch`, `repository_name` | **Gitee**（SSH 模式）：<br>`GITEE_ID_RSA`<br>**CNB**（Token 模式）：<br>`CNB_TOKEN` |
+| [`.github/workflows/publish-dotnet-release.yml`](.github/workflows/publish-dotnet-release.yml) | .NET 项目语义化发布：自动版本 + git-cliff Changelog + NuGet/Docker 可选发布 + GitHub Release | `dotnet_version`, `version_props_path`, `nuget_source`, `docker_image_name`, `docker_platforms`, `docker_context` | `GITHUB_TOKEN`<br>**NuGet**：<br>`NUGET_API_KEY`<br>**Docker**：<br>`DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `DOCKERHUB_ORGANIZATION` |
 
 ---
 
@@ -73,6 +74,46 @@ jobs:
     secrets:
       CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
 ```
+
+### 4. .NET 项目自动发布
+
+#### NuGet 包发布（如 Foundation、Server.Source）
+
+```yaml
+name: Release
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  release:
+    uses: GameFrameX/public-github-actions/.github/workflows/publish-dotnet-release.yml@main
+    with:
+      dotnet_version: "8.0.x 9.0.x 10.0.x"
+      version_props_path: "Version.props"
+    secrets: inherit
+```
+
+#### Docker 镜像发布（如 Tools）
+
+```yaml
+name: Release
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  release:
+    uses: GameFrameX/public-github-actions/.github/workflows/publish-dotnet-release.yml@main
+    with:
+      dotnet_version: "10.0.x"
+      docker_image_name: "gameframex-tools"
+    secrets: inherit
+```
+
+> NuGet 和 Docker 可同时启用，按需组合参数即可。未提供的选项自动跳过。
 
 ---
 
@@ -133,9 +174,28 @@ jobs:
 
 ---
 
+### 3️⃣ publish-dotnet-release.yml（.NET 项目语义化发布）
+
+| 步骤 | 关键脚本/动作 | 实现要点 |
+|----|-------------|---------|
+| 检出代码 | `actions/checkout@v6` | `fetch-depth: 0` 获取完整历史 |
+| Setup .NET | `actions/setup-dotnet@v4` | 支持多版本 SDK（空格分隔） |
+| 获取最新 Tag | `git describe --tags --abbrev=0` | 无 tag 时默认 `0.0.0` |
+| 版本计算 | `paulhatch/semantic-version@v5.4.0` | `BREAKING CHANGE:` → major，`feat` → minor，其余 → patch |
+| 下载共享配置 | `curl ... cliff.toml` | 从本仓库下载统一的 git-cliff 配置，调用方无需维护 |
+| 生成 Changelog | `orhun/git-cliff-action@v4` | 按提交类型（feat/fix/doc 等）分组生成 CHANGELOG.md |
+| 更新版本（可选） | `sed` 修改 Version.props | `version_props_path` 非空时才执行 |
+| NuGet 发布（可选） | `dotnet pack` + `dotnet nuget push` | `version_props_path` 非空时才执行 |
+| Docker 构建（可选） | `docker/build-push-action@v6` | `docker_image_name` 非空时才执行，推送到 Docker Hub + GHCR |
+| 推送变更 | `git push` + `git tag` | 推送 changelog 提交和版本标签 |
+| 创建 Release | `softprops/action-gh-release@v2` | 以 CHANGELOG.md 作为 Release Notes |
+
+---
+
 ## �📚 更多说明
 
-- **ChangeLog 生成逻辑**：基于 [conventional-changelog](https://github.com/conventional-changelog/conventional-changelog)，请使用 [Conventional Commits](https://www.conventionalcommits.org/) 规范提交信息。
+- **ChangeLog 生成逻辑**：Unity 项目基于 [conventional-changelog](https://github.com/conventional-changelog/conventional-changelog)，.NET 项目基于 [git-cliff](https://git-cliff.org/)。请使用 [Conventional Commits](https://www.conventionalcommits.org/) 规范提交信息。
+- **共享配置文件**：`.releaserc`（Unity）和 `cliff.toml`（.NET）均在本仓库集中维护，调用方通过 curl 下载即可，确保所有仓库的 CHANGELOG 格式统一。
 - **镜像同步频率**：建议 `on.push` 触发即可，也可改为 `schedule` 定时同步。
 - **权限最小化**：所有工作流已声明最小权限集合，调用方无需额外配置。
 
