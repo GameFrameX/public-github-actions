@@ -1,0 +1,183 @@
+name: Reusable Publish .NET Release Workflow
+
+on:
+  workflow_call:
+    inputs:
+      dotnet_version:
+        description: '.NET SDK version(s), space-separated (e.g. "8.0.x 9.0.x 10.0.x")'
+        required: false
+        default: '10.0.x'
+        type: string
+      # NuGet 选项
+      version_props_path:
+        description: 'Path to Version.props file. Leave empty to skip Version.props update.'
+        required: false
+        default: ''
+        type: string
+      nuget_source:
+        description: 'NuGet package source URL'
+        required: false
+        default: 'https://api.nuget.org/v3/index.json'
+        type: string
+      # Docker 选项
+      docker_image_name:
+        description: 'Docker image name (e.g. gameframex-tools). Leave empty to skip Docker build.'
+        required: false
+        default: ''
+        type: string
+      docker_platforms:
+        description: 'Docker build platforms'
+        required: false
+        default: 'linux/amd64,linux/arm64'
+        type: string
+      docker_context:
+        description: 'Docker build context path'
+        required: false
+        default: '.'
+        type: string
+
+# 统一配置权限，调用方无需声明
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+
+      - name: Get latest tag
+        id: tag
+        run: |
+          latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
+          echo "tag=$latest" >> $GITHUB_OUTPUT
+
+      - name: Analyze commits and calculate version
+        id: version
+        uses: paulhatch/semantic-version@v5.4.0
+        with:
+          tag_prefix: ""
+          major_pattern: "BREAKING CHANGE:"
+          minor_pattern: "feat"
+          format: "${major}.${minor}.${patch}"
+
+      - name: Check if release needed
+        id: check
+        run: |
+          if [ "${{ steps.version.outputs.version }}" != "${{ steps.tag.outputs.tag }}" ]; then
+            echo "need_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "need_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ---- Changelog 生成 ----
+
+      - name: Download shared cliff config
+        if: steps.check.outputs.need_release == 'true'
+        run: curl -L https://raw.githubusercontent.com/GameFrameX/public-github-actions/main/cliff.toml -o cliff.toml
+
+      - name: Generate CHANGELOG
+        if: steps.check.outputs.need_release == 'true'
+        uses: orhun/git-cliff-action@v4
+        id: git-cliff
+        with:
+          config: cliff.toml
+          args: --tag ${{ steps.version.outputs.version }} --strip header
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      # ---- NuGet 发布（可选） ----
+
+      - name: Update Version.props
+        if: steps.check.outputs.need_release == 'true' && inputs.version_props_path != ''
+        run: sed -i 's|<Version>[^<]*</Version>|<Version>${{ steps.version.outputs.version }}</Version>|' ${{ inputs.version_props_path }}
+
+      - name: Build
+        if: steps.check.outputs.need_release == 'true' && inputs.version_props_path != ''
+        run: dotnet build --configuration Release
+
+      - name: Pack NuGet packages
+        if: steps.check.outputs.need_release == 'true' && inputs.version_props_path != ''
+        run: dotnet pack --configuration Release --no-build --output ./artifacts
+
+      - name: Publish to NuGet
+        if: steps.check.outputs.need_release == 'true' && inputs.version_props_path != ''
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source ${{ inputs.nuget_source }} --skip-duplicate
+
+      # ---- Docker 发布（可选） ----
+
+      - name: Lowercase repository name
+        if: steps.check.outputs.need_release == 'true' && inputs.docker_image_name != ''
+        id: repo
+        run: echo "lowercase=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.need_release == 'true' && inputs.docker_image_name != ''
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: steps.check.outputs.need_release == 'true' && inputs.docker_image_name != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        if: steps.check.outputs.need_release == 'true' && inputs.docker_image_name != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        if: steps.check.outputs.need_release == 'true' && inputs.docker_image_name != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.docker_context }}
+          platforms: ${{ inputs.docker_platforms }}
+          push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          tags: |
+            ${{ secrets.DOCKERHUB_ORGANIZATION }}/${{ inputs.docker_image_name }}:${{ steps.version.outputs.version }}
+            ${{ secrets.DOCKERHUB_ORGANIZATION }}/${{ inputs.docker_image_name }}:latest
+            ghcr.io/${{ steps.repo.outputs.lowercase }}:${{ steps.version.outputs.version }}
+            ghcr.io/${{ steps.repo.outputs.lowercase }}:latest
+
+      # ---- 收尾：提交 + 标签 + Release ----
+
+      - name: Commit changes
+        if: steps.check.outputs.need_release == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(release): ${{ steps.version.outputs.version }}"
+
+      - name: Push changes and tag
+        if: steps.check.outputs.need_release == 'true'
+        run: |
+          git push origin ${{ github.ref_name }}
+          git tag ${{ steps.version.outputs.version }}
+          git push origin ${{ steps.version.outputs.version }}
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.need_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          body_path: CHANGELOG.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
