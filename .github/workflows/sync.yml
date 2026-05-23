@@ -54,51 +54,83 @@ jobs:
           ")
           echo "topics_json=${TOPICS_JSON}" >> $GITHUB_OUTPUT
 
-      - name: Ensure Gitee repo exists and setup
+      - name: Init Gitee repo
+        id: gitee-init
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_GITHUB_ACTION_SYNC_TOKEN }}
+          REPO: ${{ steps.info.outputs.repo_name }}
+          GH_DESC: ${{ steps.info.outputs.description }}
+          GH_SITE: ${{ steps.info.outputs.site_url }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "GITEE_GITHUB_ACTION_SYNC_TOKEN not configured, skipping"
+            echo "created=false" >> $GITHUB_OUTPUT
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            "https://gitee.com/api/v5/repos/GameFrameX/${REPO}?access_token=${GITEE_TOKEN}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Creating Gitee repo: GameFrameX/${REPO}"
+            CREATE_BODY=$(python3 << 'PYEOF'
+          import json, os
+          print(json.dumps({
+              "access_token": os.environ["GITEE_TOKEN"],
+              "name": os.environ["REPO"],
+              "private": False,
+              "auto_init": False
+          }))
+          PYEOF
+            )
+            CREATE_RESP=$(curl -s -w "\n%{http_code}" -X POST \
+              "https://gitee.com/api/v5/orgs/GameFrameX/repos" \
+              -H "Content-Type: application/json" \
+              -d "$CREATE_BODY")
+            CREATE_CODE=$(echo "$CREATE_RESP" | tail -1)
+            if [ "$CREATE_CODE" != "201" ] && [ "$CREATE_CODE" != "200" ]; then
+              echo "Warning: Gitee repo creation returned HTTP $CREATE_CODE"
+              echo "$CREATE_RESP" | head -n -1
+            fi
+            echo "created=true" >> $GITHUB_OUTPUT
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+          else
+            echo "Gitee repo GameFrameX/${REPO} already exists"
+            echo "created=false" >> $GITHUB_OUTPUT
+
+            # 比较当前信息与 GitHub 是否一致
+            python3 << 'PYEOF'
+          import json, os
+
+          body = json.loads(os.environ["BODY"])
+          current_desc = body.get("description", "") or ""
+          current_home = body.get("homepage", "") or ""
+          gh_desc = os.environ.get("GH_DESC", "")
+          gh_site = os.environ.get("GH_SITE", "")
+
+          needs_update = (current_desc != gh_desc) or (current_home != gh_site)
+
+          if needs_update:
+              print(f"  description: '{current_desc}' -> '{gh_desc}'")
+              print(f"  homepage: '{current_home}' -> '{gh_site}'")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"needs_update={str(needs_update).lower()}\n")
+          PYEOF
+          fi
+
+      - name: Setup Gitee repo
+        if: steps.gitee-init.outputs.created == 'true' || steps.gitee-init.outputs.needs_update == 'true'
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_GITHUB_ACTION_SYNC_TOKEN }}
           REPO: ${{ steps.info.outputs.repo_name }}
           DESC: ${{ steps.info.outputs.description }}
           SITE_URL: ${{ steps.info.outputs.site_url }}
         run: |
-          if [ -z "$GITEE_TOKEN" ]; then
-            echo "GITEE_GITHUB_ACTION_SYNC_TOKEN not configured, skipping repo init/setup"
-            exit 0
-          fi
-
-          # Check if repo exists
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            "https://gitee.com/api/v5/repos/GameFrameX/${REPO}?access_token=${GITEE_TOKEN}")
-
-          if [ "$STATUS" != "200" ]; then
-            echo "Creating Gitee repo: GameFrameX/${REPO}"
-            BODY=$(python3 << 'PYEOF'
-          import json, os
-          print(json.dumps({
-              "access_token": os.environ["GITEE_TOKEN"],
-              "name": os.environ["REPO"],
-              "description": os.environ.get("DESC", ""),
-              "homepage": os.environ.get("SITE_URL", ""),
-              "private": False,
-              "auto_init": False
-          }))
-          PYEOF
-            )
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-              "https://gitee.com/api/v5/orgs/GameFrameX/repos" \
-              -H "Content-Type: application/json" \
-              -d "$BODY")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
-              echo "Warning: Gitee repo creation returned HTTP $HTTP_CODE"
-              echo "$RESPONSE" | head -n -1
-            fi
-          else
-            echo "Gitee repo GameFrameX/${REPO} already exists"
-          fi
-
-          # Update description and homepage (idempotent)
-          echo "Updating Gitee repo info..."
+          echo "Setting up Gitee repo info..."
           BODY=$(python3 << 'PYEOF'
           import json, os
           print(json.dumps({
@@ -112,7 +144,7 @@ jobs:
           curl -s -X PATCH \
             "https://gitee.com/api/v5/repos/GameFrameX/${REPO}" \
             -H "Content-Type: application/json" \
-            -d "$BODY" > /dev/null || echo "Warning: Gitee repo update failed"
+            -d "$BODY" > /dev/null || echo "Warning: Gitee repo setup failed"
 
       - name: Set SSH
         run: |
@@ -177,7 +209,81 @@ jobs:
           ")
           echo "topics_json=${TOPICS_JSON}" >> $GITHUB_OUTPUT
 
-      - name: Ensure CNB repo exists and setup
+      - name: Init CNB repo
+        id: cnb-init
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_SYNC_TOKEN }}
+          REPO: ${{ steps.info.outputs.repo_name }}
+          GH_DESC: ${{ steps.info.outputs.description }}
+          GH_SITE: ${{ steps.info.outputs.site_url }}
+          GH_TOPICS: ${{ steps.info.outputs.topics_json }}
+        run: |
+          if [ -z "$CNB_TOKEN" ]; then
+            echo "CNB_SYNC_TOKEN not configured, skipping"
+            echo "created=false" >> $GITHUB_OUTPUT
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${CNB_TOKEN}" \
+            "https://api.cnb.cool/gameframex/${REPO}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Creating CNB repo: gameframex/${REPO}"
+            CREATE_BODY=$(python3 << 'PYEOF'
+          import json, os
+          print(json.dumps({
+              "name": os.environ["REPO"],
+              "visibility": "public"
+          }))
+          PYEOF
+            )
+            CREATE_RESP=$(curl -s -w "\n%{http_code}" -X POST \
+              "https://api.cnb.cool/gameframex/-/repos" \
+              -H "Accept: application/vnd.cnb.api+json" \
+              -H "Authorization: Bearer ${CNB_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$CREATE_BODY")
+            CREATE_CODE=$(echo "$CREATE_RESP" | tail -1)
+            if [ "$CREATE_CODE" != "201" ] && [ "$CREATE_CODE" != "200" ]; then
+              echo "Warning: CNB repo creation returned HTTP $CREATE_CODE"
+              echo "$CREATE_RESP" | head -n -1
+            fi
+            echo "created=true" >> $GITHUB_OUTPUT
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+          else
+            echo "CNB repo gameframex/${REPO} already exists"
+            echo "created=false" >> $GITHUB_OUTPUT
+
+            # 比较当前信息与 GitHub 是否一致
+            python3 << 'PYEOF'
+          import json, os
+
+          body = json.loads(os.environ["BODY"])
+          current_desc = body.get("description", "") or ""
+          current_site = body.get("site_url", "") or ""
+          current_topics = sorted(body.get("topics", []) or [])
+          gh_desc = os.environ.get("GH_DESC", "")
+          gh_site = os.environ.get("GH_SITE", "")
+          gh_topics = sorted(json.loads(os.environ.get("GH_TOPICS", "[]")))
+
+          needs_update = (current_desc != gh_desc) or (current_site != gh_site) or (current_topics != gh_topics)
+
+          if needs_update:
+              print(f"  description: '{current_desc}' -> '{gh_desc}'")
+              print(f"  site_url: '{current_site}' -> '{gh_site}'")
+              print(f"  topics: {current_topics} -> {gh_topics}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"needs_update={str(needs_update).lower()}\n")
+          PYEOF
+          fi
+
+      - name: Setup CNB repo
+        if: steps.cnb-init.outputs.created == 'true' || steps.cnb-init.outputs.needs_update == 'true'
         env:
           CNB_TOKEN: ${{ secrets.CNB_SYNC_TOKEN }}
           REPO: ${{ steps.info.outputs.repo_name }}
@@ -185,44 +291,7 @@ jobs:
           SITE_URL: ${{ steps.info.outputs.site_url }}
           TOPICS: ${{ steps.info.outputs.topics_json }}
         run: |
-          if [ -z "$CNB_TOKEN" ]; then
-            echo "CNB_SYNC_TOKEN not configured, skipping repo init/setup"
-            exit 0
-          fi
-
-          # Check if repo exists
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer ${CNB_TOKEN}" \
-            "https://api.cnb.cool/gameframex/${REPO}")
-
-          if [ "$STATUS" != "200" ]; then
-            echo "Creating CNB repo: gameframex/${REPO}"
-            BODY=$(python3 << 'PYEOF'
-          import json, os
-          print(json.dumps({
-              "name": os.environ["REPO"],
-              "description": os.environ.get("DESC", ""),
-              "visibility": "public"
-          }))
-          PYEOF
-            )
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-              "https://api.cnb.cool/gameframex/-/repos" \
-              -H "Accept: application/vnd.cnb.api+json" \
-              -H "Authorization: Bearer ${CNB_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d "$BODY")
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
-              echo "Warning: CNB repo creation returned HTTP $HTTP_CODE"
-              echo "$RESPONSE" | head -n -1
-            fi
-          else
-            echo "CNB repo gameframex/${REPO} already exists"
-          fi
-
-          # Update description, site_url, and topics (idempotent)
-          echo "Updating CNB repo info..."
+          echo "Setting up CNB repo info..."
           BODY=$(python3 << 'PYEOF'
           import json, os
           print(json.dumps({
@@ -236,7 +305,7 @@ jobs:
             "https://api.cnb.cool/gameframex/${REPO}" \
             -H "Authorization: Bearer ${CNB_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "$BODY" > /dev/null || echo "Warning: CNB repo update failed"
+            -d "$BODY" > /dev/null || echo "Warning: CNB repo setup failed"
 
       - name: Sync to CNB Repository
         uses: docker://tencentcom/git-sync
