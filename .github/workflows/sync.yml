@@ -254,7 +254,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{
               \"description\": \"${DESC}\",
-              \"site_url\": \"${SITE_URL}\",
+              \"site\": \"${SITE_URL}\",
               \"topics\": ${TRIMMED_TOPICS}
             }")
           RESULT_CODE=$(echo "$RESULT" | tail -1)
