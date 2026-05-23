@@ -176,7 +176,7 @@ jobs:
           TOPICS_JSON=$(jq -c '[.repositoryTopics[] | if type == "object" then .name else . end]' /tmp/gh_repo.json)
           echo "topics_json=${TOPICS_JSON}" >> $GITHUB_OUTPUT
 
-      - name: Init CNB repo
+      - name: Init repo
         id: cnb-init
         env:
           CNB_TOKEN: ${{ secrets.CNB_SYNC_TOKEN }}
@@ -231,25 +231,25 @@ jobs:
             echo "needs_update=${NEEDS_UPDATE}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Setup CNB repo
+      - name: Setup repo
         if: steps.cnb-init.outputs.created == 'true' || steps.cnb-init.outputs.needs_update == 'true'
         env:
-          CNB_TOKEN: ${{ secrets.CNB_SYNC_TOKEN }}
+          CNB_SYNC_TOKEN: ${{ secrets.CNB_SYNC_TOKEN }}
           REPO: ${{ steps.info.outputs.repo_name }}
           DESC: ${{ steps.info.outputs.description }}
           SITE_URL: ${{ steps.info.outputs.site_url }}
           TOPICS: ${{ steps.info.outputs.topics_json }}
         run: |
-          echo "Setting up CNB repo info..."
+          echo "Setting up repo info..."
           curl -s -X PATCH \
             "https://api.cnb.cool/gameframex/${REPO}" \
-            -H "Authorization: Bearer ${CNB_TOKEN}" \
+            -H "Authorization: Bearer ${CNB_SYNC_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "{
               \"description\": \"${DESC}\",
               \"site_url\": \"${SITE_URL}\",
               \"topics\": ${TOPICS}
-            }" > /dev/null || echo "Warning: CNB repo setup failed"
+            }" > /dev/null || echo "Warning: repo setup failed"
 
       - name: Sync to CNB Repository
         uses: docker://tencentcom/git-sync
