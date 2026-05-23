@@ -90,10 +90,14 @@ jobs:
             CURRENT_HOME=$(echo "$BODY" | jq -r '.homepage // ""')
             NEEDS_UPDATE="false"
 
+            echo "  GitHub -> description: '${GH_DESC}', homepage: '${GH_SITE}'"
+            echo "  Gitee  -> description: '${CURRENT_DESC}', homepage: '${CURRENT_HOME}'"
+
             if [ "$CURRENT_DESC" != "$GH_DESC" ] || [ "$CURRENT_HOME" != "$GH_SITE" ]; then
               NEEDS_UPDATE="true"
-              echo "  description: '${CURRENT_DESC}' -> '${GH_DESC}'"
-              echo "  homepage: '${CURRENT_HOME}' -> '${GH_SITE}'"
+              echo "  Info mismatch, needs update"
+            else
+              echo "  Info matches, skipping setup"
             fi
             echo "needs_update=${NEEDS_UPDATE}" >> $GITHUB_OUTPUT
           fi
