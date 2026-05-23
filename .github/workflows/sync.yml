@@ -218,7 +218,7 @@ jobs:
             # 比较当前信息与 GitHub 是否一致
             CURRENT_DESC=$(echo "$BODY" | jq -r '.description // ""')
             CURRENT_SITE=$(echo "$BODY" | jq -r '.site_url // ""')
-            CURRENT_TOPICS=$(echo "$BODY" | jq -c '(.topics // []) | sort')
+            CURRENT_TOPICS=$(echo "$BODY" | jq -c 'if (.topics | type) == "array" then (.topics | sort) else [] end')
             SORTED_GH_TOPICS=$(echo "$GH_TOPICS" | jq -c 'sort')
             NEEDS_UPDATE="false"
 
