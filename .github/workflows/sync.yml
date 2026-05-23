@@ -13,21 +13,6 @@ on:
         description: '仓库名称 (格式: owner/repo)'
         required: true
         type: string
-      description:
-        description: '仓库描述（可选，不提供则尝试从 package.json 读取）'
-        required: false
-        type: string
-        default: ''
-      homepage:
-        description: '仓库主页（可选，默认 https://gameframex.doc.alianblank.com）'
-        required: false
-        type: string
-        default: 'https://gameframex.doc.alianblank.com'
-      topics:
-        description: '仓库主题标签，逗号分隔（可选，用于 CNB，不提供则尝试从 package.json keywords 读取）'
-        required: false
-        type: string
-        default: ''
 
 jobs:
   sync-to-gitee:
@@ -44,25 +29,37 @@ jobs:
           git config --global user.email "${{ vars.GIT_USER_EMAIL }}"
           git config --global user.name "${{ vars.GIT_USER_NAME }}"
 
-      - name: Prepare repo info
+      - name: Fetch repo info from GitHub
         id: info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REPO_NAME="${{ inputs.repository_name }}"
           REPO_ONLY="${REPO_NAME#*/}"
           echo "repo_name=${REPO_ONLY}" >> $GITHUB_OUTPUT
 
-          DESC="${{ inputs.description }}"
-          if [ -z "$DESC" ] && [ -f package.json ]; then
-            DESC=$(python3 -c "import json; print(json.load(open('package.json')).get('description', ''))" 2>/dev/null || true)
-          fi
+          # 从 GitHub 仓库获取 description、homepage、topics
+          gh repo view "${REPO_NAME}" --json description,homepageUrl,repositoryTopics > /tmp/gh_repo.json
+
+          DESC=$(python3 -c "import json; print(json.load(open('/tmp/gh_repo.json')).get('description', ''))")
           echo "description=${DESC}" >> $GITHUB_OUTPUT
+
+          SITE_URL=$(python3 -c "import json; print(json.load(open('/tmp/gh_repo.json')).get('homepageUrl', ''))")
+          echo "site_url=${SITE_URL}" >> $GITHUB_OUTPUT
+
+          TOPICS_JSON=$(python3 -c "
+          import json
+          topics = [t.get('name', t) if isinstance(t, dict) else t for t in json.load(open('/tmp/gh_repo.json')).get('repositoryTopics', [])]
+          print(json.dumps(topics))
+          ")
+          echo "topics_json=${TOPICS_JSON}" >> $GITHUB_OUTPUT
 
       - name: Ensure Gitee repo exists and setup
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_GITHUB_ACTION_SYNC_TOKEN }}
           REPO: ${{ steps.info.outputs.repo_name }}
           DESC: ${{ steps.info.outputs.description }}
-          SITE_URL: ${{ inputs.homepage }}
+          SITE_URL: ${{ steps.info.outputs.site_url }}
         run: |
           if [ -z "$GITEE_TOKEN" ]; then
             echo "GITEE_GITHUB_ACTION_SYNC_TOKEN not configured, skipping repo init/setup"
@@ -155,32 +152,29 @@ jobs:
         with:
           fetch-depth: 0 # 获取所有提交历史
 
-      - name: Prepare repo info
+      - name: Fetch repo info from GitHub
         id: info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REPO_NAME="${{ inputs.repository_name }}"
           REPO_ONLY="${REPO_NAME#*/}"
           echo "repo_name=${REPO_ONLY}" >> $GITHUB_OUTPUT
 
-          DESC="${{ inputs.description }}"
-          if [ -z "$DESC" ] && [ -f package.json ]; then
-            DESC=$(python3 -c "import json; print(json.load(open('package.json')).get('description', ''))" 2>/dev/null || true)
-          fi
+          # 从 GitHub 仓库获取 description、homepage、topics
+          gh repo view "${REPO_NAME}" --json description,homepageUrl,repositoryTopics > /tmp/gh_repo.json
+
+          DESC=$(python3 -c "import json; print(json.load(open('/tmp/gh_repo.json')).get('description', ''))")
           echo "description=${DESC}" >> $GITHUB_OUTPUT
 
-          if [ -n "${{ inputs.topics }}" ]; then
-            TOPICS_JSON=$(echo "${{ inputs.topics }}" | python3 -c "
-          import sys, json
-          print(json.dumps([t.strip() for t in sys.stdin.read().split(',') if t.strip()]))
-          ")
-          elif [ -f package.json ]; then
-            TOPICS_JSON=$(python3 -c "
+          SITE_URL=$(python3 -c "import json; print(json.load(open('/tmp/gh_repo.json')).get('homepageUrl', ''))")
+          echo "site_url=${SITE_URL}" >> $GITHUB_OUTPUT
+
+          TOPICS_JSON=$(python3 -c "
           import json
-          print(json.dumps(json.load(open('package.json')).get('keywords', [])))
-          " 2>/dev/null || echo "[]")
-          else
-            TOPICS_JSON="[]"
-          fi
+          topics = [t.get('name', t) if isinstance(t, dict) else t for t in json.load(open('/tmp/gh_repo.json')).get('repositoryTopics', [])]
+          print(json.dumps(topics))
+          ")
           echo "topics_json=${TOPICS_JSON}" >> $GITHUB_OUTPUT
 
       - name: Ensure CNB repo exists and setup
@@ -188,7 +182,7 @@ jobs:
           CNB_TOKEN: ${{ secrets.CNB_SYNC_TOKEN }}
           REPO: ${{ steps.info.outputs.repo_name }}
           DESC: ${{ steps.info.outputs.description }}
-          SITE_URL: ${{ inputs.homepage }}
+          SITE_URL: ${{ steps.info.outputs.site_url }}
           TOPICS: ${{ steps.info.outputs.topics_json }}
         run: |
           if [ -z "$CNB_TOKEN" ]; then
