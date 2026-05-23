@@ -38,20 +38,15 @@ jobs:
           REPO_ONLY="${REPO_NAME#*/}"
           echo "repo_name=${REPO_ONLY}" >> $GITHUB_OUTPUT
 
-          # 从 GitHub 仓库获取 description、homepage、topics
           gh repo view "${REPO_NAME}" --json description,homepageUrl,repositoryTopics > /tmp/gh_repo.json
 
-          DESC=$(python3 -c "import json; print(json.load(open('/tmp/gh_repo.json')).get('description', ''))")
+          DESC=$(jq -r '.description // ""' /tmp/gh_repo.json)
           echo "description=${DESC}" >> $GITHUB_OUTPUT
 
-          SITE_URL=$(python3 -c "import json; print(json.load(open('/tmp/gh_repo.json')).get('homepageUrl', ''))")
+          SITE_URL=$(jq -r '.homepageUrl // ""' /tmp/gh_repo.json)
           echo "site_url=${SITE_URL}" >> $GITHUB_OUTPUT
 
-          TOPICS_JSON=$(python3 -c "
-          import json
-          topics = [t.get('name', t) if isinstance(t, dict) else t for t in json.load(open('/tmp/gh_repo.json')).get('repositoryTopics', [])]
-          print(json.dumps(topics))
-          ")
+          TOPICS_JSON=$(jq -c '[.repositoryTopics[] | if type == "object" then .name else . end]' /tmp/gh_repo.json)
           echo "topics_json=${TOPICS_JSON}" >> $GITHUB_OUTPUT
 
       - name: Init Gitee repo
@@ -72,29 +67,19 @@ jobs:
           RESPONSE=$(curl -s -w "\n%{http_code}" \
             "https://gitee.com/api/v5/repos/GameFrameX/${REPO}?access_token=${GITEE_TOKEN}")
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | head -n -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
 
           if [ "$HTTP_CODE" != "200" ]; then
             echo "Creating Gitee repo: GameFrameX/${REPO}"
-            CREATE_BODY=$(python3 << 'PYEOF'
-          import json, os
-          print(json.dumps({
-              "access_token": os.environ["GITEE_TOKEN"],
-              "name": os.environ["REPO"],
-              "private": False,
-              "auto_init": False
-          }))
-          PYEOF
-            )
-            CREATE_RESP=$(curl -s -w "\n%{http_code}" -X POST \
+            curl -s -X POST \
               "https://gitee.com/api/v5/orgs/GameFrameX/repos" \
               -H "Content-Type: application/json" \
-              -d "$CREATE_BODY")
-            CREATE_CODE=$(echo "$CREATE_RESP" | tail -1)
-            if [ "$CREATE_CODE" != "201" ] && [ "$CREATE_CODE" != "200" ]; then
-              echo "Warning: Gitee repo creation returned HTTP $CREATE_CODE"
-              echo "$CREATE_RESP" | head -n -1
-            fi
+              -d "{
+                \"access_token\": \"${GITEE_TOKEN}\",
+                \"name\": \"${REPO}\",
+                \"private\": false,
+                \"auto_init\": false
+              }" > /dev/null 2>&1 || true
             echo "created=true" >> $GITHUB_OUTPUT
             echo "needs_update=false" >> $GITHUB_OUTPUT
           else
@@ -102,24 +87,16 @@ jobs:
             echo "created=false" >> $GITHUB_OUTPUT
 
             # 比较当前信息与 GitHub 是否一致
-            python3 << 'PYEOF'
-          import json, os
+            CURRENT_DESC=$(echo "$BODY" | jq -r '.description // ""')
+            CURRENT_HOME=$(echo "$BODY" | jq -r '.homepage // ""')
+            NEEDS_UPDATE="false"
 
-          body = json.loads(os.environ["BODY"])
-          current_desc = body.get("description", "") or ""
-          current_home = body.get("homepage", "") or ""
-          gh_desc = os.environ.get("GH_DESC", "")
-          gh_site = os.environ.get("GH_SITE", "")
-
-          needs_update = (current_desc != gh_desc) or (current_home != gh_site)
-
-          if needs_update:
-              print(f"  description: '{current_desc}' -> '{gh_desc}'")
-              print(f"  homepage: '{current_home}' -> '{gh_site}'")
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"needs_update={str(needs_update).lower()}\n")
-          PYEOF
+            if [ "$CURRENT_DESC" != "$GH_DESC" ] || [ "$CURRENT_HOME" != "$GH_SITE" ]; then
+              NEEDS_UPDATE="true"
+              echo "  description: '${CURRENT_DESC}' -> '${GH_DESC}'"
+              echo "  homepage: '${CURRENT_HOME}' -> '${GH_SITE}'"
+            fi
+            echo "needs_update=${NEEDS_UPDATE}" >> $GITHUB_OUTPUT
           fi
 
       - name: Setup Gitee repo
@@ -131,20 +108,15 @@ jobs:
           SITE_URL: ${{ steps.info.outputs.site_url }}
         run: |
           echo "Setting up Gitee repo info..."
-          BODY=$(python3 << 'PYEOF'
-          import json, os
-          print(json.dumps({
-              "access_token": os.environ["GITEE_TOKEN"],
-              "name": os.environ["REPO"],
-              "description": os.environ.get("DESC", ""),
-              "homepage": os.environ.get("SITE_URL", "")
-          }))
-          PYEOF
-          )
           curl -s -X PATCH \
             "https://gitee.com/api/v5/repos/GameFrameX/${REPO}" \
             -H "Content-Type: application/json" \
-            -d "$BODY" > /dev/null || echo "Warning: Gitee repo setup failed"
+            -d "{
+              \"access_token\": \"${GITEE_TOKEN}\",
+              \"name\": \"${REPO}\",
+              \"description\": \"${DESC}\",
+              \"homepage\": \"${SITE_URL}\"
+            }" > /dev/null || echo "Warning: Gitee repo setup failed"
 
       - name: Set SSH
         run: |
@@ -193,20 +165,15 @@ jobs:
           REPO_ONLY="${REPO_NAME#*/}"
           echo "repo_name=${REPO_ONLY}" >> $GITHUB_OUTPUT
 
-          # 从 GitHub 仓库获取 description、homepage、topics
           gh repo view "${REPO_NAME}" --json description,homepageUrl,repositoryTopics > /tmp/gh_repo.json
 
-          DESC=$(python3 -c "import json; print(json.load(open('/tmp/gh_repo.json')).get('description', ''))")
+          DESC=$(jq -r '.description // ""' /tmp/gh_repo.json)
           echo "description=${DESC}" >> $GITHUB_OUTPUT
 
-          SITE_URL=$(python3 -c "import json; print(json.load(open('/tmp/gh_repo.json')).get('homepageUrl', ''))")
+          SITE_URL=$(jq -r '.homepageUrl // ""' /tmp/gh_repo.json)
           echo "site_url=${SITE_URL}" >> $GITHUB_OUTPUT
 
-          TOPICS_JSON=$(python3 -c "
-          import json
-          topics = [t.get('name', t) if isinstance(t, dict) else t for t in json.load(open('/tmp/gh_repo.json')).get('repositoryTopics', [])]
-          print(json.dumps(topics))
-          ")
+          TOPICS_JSON=$(jq -c '[.repositoryTopics[] | if type == "object" then .name else . end]' /tmp/gh_repo.json)
           echo "topics_json=${TOPICS_JSON}" >> $GITHUB_OUTPUT
 
       - name: Init CNB repo
@@ -229,29 +196,19 @@ jobs:
             -H "Authorization: Bearer ${CNB_TOKEN}" \
             "https://api.cnb.cool/gameframex/${REPO}")
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | head -n -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
 
           if [ "$HTTP_CODE" != "200" ]; then
             echo "Creating CNB repo: gameframex/${REPO}"
-            CREATE_BODY=$(python3 << 'PYEOF'
-          import json, os
-          print(json.dumps({
-              "name": os.environ["REPO"],
-              "visibility": "public"
-          }))
-          PYEOF
-            )
-            CREATE_RESP=$(curl -s -w "\n%{http_code}" -X POST \
+            curl -s -X POST \
               "https://api.cnb.cool/gameframex/-/repos" \
               -H "Accept: application/vnd.cnb.api+json" \
               -H "Authorization: Bearer ${CNB_TOKEN}" \
               -H "Content-Type: application/json" \
-              -d "$CREATE_BODY")
-            CREATE_CODE=$(echo "$CREATE_RESP" | tail -1)
-            if [ "$CREATE_CODE" != "201" ] && [ "$CREATE_CODE" != "200" ]; then
-              echo "Warning: CNB repo creation returned HTTP $CREATE_CODE"
-              echo "$CREATE_RESP" | head -n -1
-            fi
+              -d "{
+                \"name\": \"${REPO}\",
+                \"visibility\": \"public\"
+              }" > /dev/null 2>&1 || true
             echo "created=true" >> $GITHUB_OUTPUT
             echo "needs_update=false" >> $GITHUB_OUTPUT
           else
@@ -259,27 +216,19 @@ jobs:
             echo "created=false" >> $GITHUB_OUTPUT
 
             # 比较当前信息与 GitHub 是否一致
-            python3 << 'PYEOF'
-          import json, os
+            CURRENT_DESC=$(echo "$BODY" | jq -r '.description // ""')
+            CURRENT_SITE=$(echo "$BODY" | jq -r '.site_url // ""')
+            CURRENT_TOPICS=$(echo "$BODY" | jq -c '(.topics // []) | sort')
+            SORTED_GH_TOPICS=$(echo "$GH_TOPICS" | jq -c 'sort')
+            NEEDS_UPDATE="false"
 
-          body = json.loads(os.environ["BODY"])
-          current_desc = body.get("description", "") or ""
-          current_site = body.get("site_url", "") or ""
-          current_topics = sorted(body.get("topics", []) or [])
-          gh_desc = os.environ.get("GH_DESC", "")
-          gh_site = os.environ.get("GH_SITE", "")
-          gh_topics = sorted(json.loads(os.environ.get("GH_TOPICS", "[]")))
-
-          needs_update = (current_desc != gh_desc) or (current_site != gh_site) or (current_topics != gh_topics)
-
-          if needs_update:
-              print(f"  description: '{current_desc}' -> '{gh_desc}'")
-              print(f"  site_url: '{current_site}' -> '{gh_site}'")
-              print(f"  topics: {current_topics} -> {gh_topics}")
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"needs_update={str(needs_update).lower()}\n")
-          PYEOF
+            if [ "$CURRENT_DESC" != "$GH_DESC" ] || [ "$CURRENT_SITE" != "$GH_SITE" ] || [ "$CURRENT_TOPICS" != "$SORTED_GH_TOPICS" ]; then
+              NEEDS_UPDATE="true"
+              echo "  description: '${CURRENT_DESC}' -> '${GH_DESC}'"
+              echo "  site_url: '${CURRENT_SITE}' -> '${GH_SITE}'"
+              echo "  topics: ${CURRENT_TOPICS} -> ${SORTED_GH_TOPICS}"
+            fi
+            echo "needs_update=${NEEDS_UPDATE}" >> $GITHUB_OUTPUT
           fi
 
       - name: Setup CNB repo
@@ -292,20 +241,15 @@ jobs:
           TOPICS: ${{ steps.info.outputs.topics_json }}
         run: |
           echo "Setting up CNB repo info..."
-          BODY=$(python3 << 'PYEOF'
-          import json, os
-          print(json.dumps({
-              "description": os.environ.get("DESC", ""),
-              "site_url": os.environ.get("SITE_URL", ""),
-              "topics": json.loads(os.environ.get("TOPICS", "[]"))
-          }))
-          PYEOF
-          )
           curl -s -X PATCH \
             "https://api.cnb.cool/gameframex/${REPO}" \
             -H "Authorization: Bearer ${CNB_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "$BODY" > /dev/null || echo "Warning: CNB repo setup failed"
+            -d "{
+              \"description\": \"${DESC}\",
+              \"site_url\": \"${SITE_URL}\",
+              \"topics\": ${TOPICS}
+            }" > /dev/null || echo "Warning: CNB repo setup failed"
 
       - name: Sync to CNB Repository
         uses: docker://tencentcom/git-sync
