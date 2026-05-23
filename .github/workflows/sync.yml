@@ -13,11 +13,26 @@ on:
         description: '仓库名称 (格式: owner/repo)'
         required: true
         type: string
+      description:
+        description: '仓库描述（可选，不提供则尝试从 package.json 读取）'
+        required: false
+        type: string
+        default: ''
+      homepage:
+        description: '仓库主页（可选，默认 https://gameframex.doc.alianblank.com）'
+        required: false
+        type: string
+        default: 'https://gameframex.doc.alianblank.com'
+      topics:
+        description: '仓库主题标签，逗号分隔（可选，用于 CNB，不提供则尝试从 package.json keywords 读取）'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   sync-to-gitee:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -28,6 +43,79 @@ jobs:
         run: |
           git config --global user.email "${{ vars.GIT_USER_EMAIL }}"
           git config --global user.name "${{ vars.GIT_USER_NAME }}"
+
+      - name: Prepare repo info
+        id: info
+        run: |
+          REPO_NAME="${{ inputs.repository_name }}"
+          REPO_ONLY="${REPO_NAME#*/}"
+          echo "repo_name=${REPO_ONLY}" >> $GITHUB_OUTPUT
+
+          DESC="${{ inputs.description }}"
+          if [ -z "$DESC" ] && [ -f package.json ]; then
+            DESC=$(python3 -c "import json; print(json.load(open('package.json')).get('description', ''))" 2>/dev/null || true)
+          fi
+          echo "description=${DESC}" >> $GITHUB_OUTPUT
+
+      - name: Ensure Gitee repo exists and setup
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          REPO: ${{ steps.info.outputs.repo_name }}
+          DESC: ${{ steps.info.outputs.description }}
+          SITE_URL: ${{ inputs.homepage }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "GITEE_TOKEN not configured, skipping repo init/setup"
+            exit 0
+          fi
+
+          # Check if repo exists
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://gitee.com/api/v5/repos/GameFrameX/${REPO}?access_token=${GITEE_TOKEN}")
+
+          if [ "$STATUS" != "200" ]; then
+            echo "Creating Gitee repo: GameFrameX/${REPO}"
+            BODY=$(python3 << 'PYEOF'
+          import json, os
+          print(json.dumps({
+              "access_token": os.environ["GITEE_TOKEN"],
+              "name": os.environ["REPO"],
+              "description": os.environ.get("DESC", ""),
+              "homepage": os.environ.get("SITE_URL", ""),
+              "private": False,
+              "auto_init": False
+          }))
+          PYEOF
+            )
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              "https://gitee.com/api/v5/orgs/GameFrameX/repos" \
+              -H "Content-Type: application/json" \
+              -d "$BODY")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
+              echo "Warning: Gitee repo creation returned HTTP $HTTP_CODE"
+              echo "$RESPONSE" | head -n -1
+            fi
+          else
+            echo "Gitee repo GameFrameX/${REPO} already exists"
+          fi
+
+          # Update description and homepage (idempotent)
+          echo "Updating Gitee repo info..."
+          BODY=$(python3 << 'PYEOF'
+          import json, os
+          print(json.dumps({
+              "access_token": os.environ["GITEE_TOKEN"],
+              "name": os.environ["REPO"],
+              "description": os.environ.get("DESC", ""),
+              "homepage": os.environ.get("SITE_URL", "")
+          }))
+          PYEOF
+          )
+          curl -s -X PATCH \
+            "https://gitee.com/api/v5/repos/GameFrameX/${REPO}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" > /dev/null || echo "Warning: Gitee repo update failed"
 
       - name: Set SSH
         run: |
@@ -51,7 +139,7 @@ jobs:
         run: git fetch --prune mirror --tags --verbose
 
       - name: Pull and push
-        run: | 
+        run: |
           if [ "${{ inputs.target_branch }}" ]; then
             git checkout ${{ inputs.target_branch }}
             git push -f mirror ${{ inputs.target_branch }}
@@ -60,19 +148,109 @@ jobs:
 
   sync-to-cnb:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
           fetch-depth: 0 # 获取所有提交历史
+
+      - name: Prepare repo info
+        id: info
+        run: |
+          REPO_NAME="${{ inputs.repository_name }}"
+          REPO_ONLY="${REPO_NAME#*/}"
+          echo "repo_name=${REPO_ONLY}" >> $GITHUB_OUTPUT
+
+          DESC="${{ inputs.description }}"
+          if [ -z "$DESC" ] && [ -f package.json ]; then
+            DESC=$(python3 -c "import json; print(json.load(open('package.json')).get('description', ''))" 2>/dev/null || true)
+          fi
+          echo "description=${DESC}" >> $GITHUB_OUTPUT
+
+          if [ -n "${{ inputs.topics }}" ]; then
+            TOPICS_JSON=$(echo "${{ inputs.topics }}" | python3 -c "
+          import sys, json
+          print(json.dumps([t.strip() for t in sys.stdin.read().split(',') if t.strip()]))
+          ")
+          elif [ -f package.json ]; then
+            TOPICS_JSON=$(python3 -c "
+          import json
+          print(json.dumps(json.load(open('package.json')).get('keywords', [])))
+          " 2>/dev/null || echo "[]")
+          else
+            TOPICS_JSON="[]"
+          fi
+          echo "topics_json=${TOPICS_JSON}" >> $GITHUB_OUTPUT
+
+      - name: Ensure CNB repo exists and setup
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_SYNC_TOKEN }}
+          REPO: ${{ steps.info.outputs.repo_name }}
+          DESC: ${{ steps.info.outputs.description }}
+          SITE_URL: ${{ inputs.homepage }}
+          TOPICS: ${{ steps.info.outputs.topics_json }}
+        run: |
+          if [ -z "$CNB_TOKEN" ]; then
+            echo "CNB_SYNC_TOKEN not configured, skipping repo init/setup"
+            exit 0
+          fi
+
+          # Check if repo exists
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${CNB_TOKEN}" \
+            "https://api.cnb.cool/gameframex/${REPO}")
+
+          if [ "$STATUS" != "200" ]; then
+            echo "Creating CNB repo: gameframex/${REPO}"
+            BODY=$(python3 << 'PYEOF'
+          import json, os
+          print(json.dumps({
+              "name": os.environ["REPO"],
+              "description": os.environ.get("DESC", ""),
+              "visibility": "public"
+          }))
+          PYEOF
+            )
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              "https://api.cnb.cool/gameframex/-/repos" \
+              -H "Accept: application/vnd.cnb.api+json" \
+              -H "Authorization: Bearer ${CNB_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "$BODY")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
+              echo "Warning: CNB repo creation returned HTTP $HTTP_CODE"
+              echo "$RESPONSE" | head -n -1
+            fi
+          else
+            echo "CNB repo gameframex/${REPO} already exists"
+          fi
+
+          # Update description, site_url, and topics (idempotent)
+          echo "Updating CNB repo info..."
+          BODY=$(python3 << 'PYEOF'
+          import json, os
+          print(json.dumps({
+              "description": os.environ.get("DESC", ""),
+              "site_url": os.environ.get("SITE_URL", ""),
+              "topics": json.loads(os.environ.get("TOPICS", "[]"))
+          }))
+          PYEOF
+          )
+          curl -s -X PATCH \
+            "https://api.cnb.cool/gameframex/${REPO}" \
+            -H "Authorization: Bearer ${CNB_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" > /dev/null || echo "Warning: CNB repo update failed"
+
       - name: Sync to CNB Repository
         uses: docker://tencentcom/git-sync
         env:
           PLUGIN_TARGET_URL: "https://cnb.cool/${{ inputs.repository_name }}.git"
           PLUGIN_AUTH_TYPE: "https"
           PLUGIN_USERNAME: "cnb"
-          PLUGIN_PASSWORD: ${{ secrets.CNB_TOKEN }}
+          PLUGIN_PASSWORD: ${{ secrets.CNB_SYNC_TOKEN }}
           PLUGIN_FORCE: "true"
           PLUGIN_SYNC_MODE: "rebase"
           PLUGIN_PUSH_TAGS: "true"
