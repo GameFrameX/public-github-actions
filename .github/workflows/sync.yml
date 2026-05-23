@@ -59,13 +59,13 @@ jobs:
 
       - name: Ensure Gitee repo exists and setup
         env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_TOKEN: ${{ secrets.GITEE_GITHUB_ACTION_SYNC_TOKEN }}
           REPO: ${{ steps.info.outputs.repo_name }}
           DESC: ${{ steps.info.outputs.description }}
           SITE_URL: ${{ inputs.homepage }}
         run: |
           if [ -z "$GITEE_TOKEN" ]; then
-            echo "GITEE_TOKEN not configured, skipping repo init/setup"
+            echo "GITEE_GITHUB_ACTION_SYNC_TOKEN not configured, skipping repo init/setup"
             exit 0
           fi
 
