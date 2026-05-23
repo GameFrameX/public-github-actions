@@ -49,7 +49,7 @@ jobs:
           TOPICS_JSON=$(jq -c '[.repositoryTopics[] | if type == "object" then .name else . end]' /tmp/gh_repo.json)
           echo "topics_json=${TOPICS_JSON}" >> $GITHUB_OUTPUT
 
-      - name: Init Gitee repo
+      - name: Init repo
         id: gitee-init
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_GITHUB_ACTION_SYNC_TOKEN }}
@@ -86,7 +86,6 @@ jobs:
             echo "Gitee repo GameFrameX/${REPO} already exists"
             echo "created=false" >> $GITHUB_OUTPUT
 
-            # 比较当前信息与 GitHub 是否一致
             CURRENT_DESC=$(echo "$BODY" | jq -r '.description // ""')
             CURRENT_HOME=$(echo "$BODY" | jq -r '.homepage // ""')
             NEEDS_UPDATE="false"
@@ -99,24 +98,31 @@ jobs:
             echo "needs_update=${NEEDS_UPDATE}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Setup Gitee repo
+      - name: Setup repo
         if: steps.gitee-init.outputs.created == 'true' || steps.gitee-init.outputs.needs_update == 'true'
         env:
-          GITEE_TOKEN: ${{ secrets.GITEE_GITHUB_ACTION_SYNC_TOKEN }}
+          GITEE_GITHUB_ACTION_SYNC_TOKEN: ${{ secrets.GITEE_GITHUB_ACTION_SYNC_TOKEN }}
           REPO: ${{ steps.info.outputs.repo_name }}
           DESC: ${{ steps.info.outputs.description }}
           SITE_URL: ${{ steps.info.outputs.site_url }}
         run: |
-          echo "Setting up Gitee repo info..."
-          curl -s -X PATCH \
+          echo "Setting up repo info..."
+          RESULT=$(curl -s -w "\n%{http_code}" -X PATCH \
             "https://gitee.com/api/v5/repos/GameFrameX/${REPO}" \
             -H "Content-Type: application/json" \
             -d "{
-              \"access_token\": \"${GITEE_TOKEN}\",
+              \"access_token\": \"${GITEE_GITHUB_ACTION_SYNC_TOKEN}\",
               \"name\": \"${REPO}\",
               \"description\": \"${DESC}\",
               \"homepage\": \"${SITE_URL}\"
-            }" > /dev/null || echo "Warning: Gitee repo setup failed"
+            }")
+          RESULT_CODE=$(echo "$RESULT" | tail -1)
+          if [ "$RESULT_CODE" != "200" ]; then
+            echo "Warning: Gitee setup failed (HTTP $RESULT_CODE)"
+            echo "$RESULT" | sed '$d'
+          else
+            echo "Gitee repo info updated successfully"
+          fi
 
       - name: Set SSH
         run: |
@@ -241,7 +247,7 @@ jobs:
           TOPICS: ${{ steps.info.outputs.topics_json }}
         run: |
           echo "Setting up repo info..."
-          curl -s -X PATCH \
+          RESULT=$(curl -s -w "\n%{http_code}" -X PATCH \
             "https://api.cnb.cool/gameframex/${REPO}" \
             -H "Authorization: Bearer ${CNB_SYNC_TOKEN}" \
             -H "Content-Type: application/json" \
@@ -249,7 +255,14 @@ jobs:
               \"description\": \"${DESC}\",
               \"site_url\": \"${SITE_URL}\",
               \"topics\": ${TOPICS}
-            }" > /dev/null || echo "Warning: repo setup failed"
+            }")
+          RESULT_CODE=$(echo "$RESULT" | tail -1)
+          if [ "$RESULT_CODE" != "200" ]; then
+            echo "Warning: CNB setup failed (HTTP $RESULT_CODE)"
+            echo "$RESULT" | sed '$d'
+          else
+            echo "CNB repo info updated successfully"
+          fi
 
       - name: Sync to CNB Repository
         uses: docker://tencentcom/git-sync
