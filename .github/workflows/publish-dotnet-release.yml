@@ -92,7 +92,7 @@ jobs:
         id: git-cliff
         with:
           config: cliff.toml
-          args: --tag ${{ steps.version.outputs.version }} --latest --strip header
+          args: --tag ${{ steps.version.outputs.version }} --strip header
         env:
           OUTPUT: CHANGELOG.md
           GITHUB_REPO: ${{ github.repository }}
@@ -158,6 +158,16 @@ jobs:
 
       # ---- 收尾：提交 + 标签 + Release ----
 
+      - name: Generate release notes (current version only)
+        if: steps.check.outputs.need_release == 'true'
+        id: release-notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --tag ${{ steps.version.outputs.version }} --latest --strip header
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+
       - name: Commit changes
         if: steps.check.outputs.need_release == 'true'
         run: |
@@ -178,6 +188,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          body_path: CHANGELOG.md
+          body: ${{ steps.release-notes.outputs.changelog }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
