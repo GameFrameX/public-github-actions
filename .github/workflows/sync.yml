@@ -225,7 +225,7 @@ jobs:
             CURRENT_DESC=$(echo "$BODY" | jq -r '.description // ""')
             CURRENT_SITE=$(echo "$BODY" | jq -r '.site_url // ""')
             CURRENT_TOPICS=$(echo "$BODY" | jq -c 'if (.topics | type) == "array" then (.topics | sort) else [] end')
-            SORTED_GH_TOPICS=$(echo "$GH_TOPICS" | jq -c '.[:12] | sort')
+            SORTED_GH_TOPICS=$(echo "$GH_TOPICS" | jq -c '[.[] | select(length <= 12)][:12] | sort')
             NEEDS_UPDATE="false"
 
             if [ "$CURRENT_DESC" != "$GH_DESC" ] || [ "$CURRENT_SITE" != "$GH_SITE" ] || [ "$CURRENT_TOPICS" != "$SORTED_GH_TOPICS" ]; then
@@ -247,7 +247,7 @@ jobs:
           TOPICS: ${{ steps.info.outputs.topics_json }}
         run: |
           echo "Setting up repo info..."
-          TRIMMED_TOPICS=$(echo "$TOPICS" | jq -c '.[:12]')
+          TRIMMED_TOPICS=$(echo "$TOPICS" | jq -c '[.[] | select(length <= 12)][:12]')
           RESULT=$(curl -s -w "\n%{http_code}" -X PATCH \
             "https://api.cnb.cool/gameframex/${REPO}" \
             -H "Authorization: Bearer ${CNB_SYNC_TOKEN}" \
