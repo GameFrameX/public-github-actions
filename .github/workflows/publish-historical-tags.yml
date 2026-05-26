@@ -38,14 +38,11 @@ jobs:
 
             npm pkg fix
 
-            if npm publish 2>&1; then
-              echo "=== Published $tag as latest ==="
-            else
-              echo "Retrying with --tag historical..."
-              npm publish --tag historical
-              echo "=== Published $tag as historical ==="
-            fi
+            npm publish --force 2>&1 && echo "=== Published $tag ===" && { git checkout -- .; continue; }
+            
+            echo "Normal publish failed, trying with --tag historical..."
+            npm publish --force --tag historical 2>&1 && echo "=== Published $tag as historical ===" && { git checkout -- .; continue; }
 
+            echo "=== FAILED to publish $tag ==="
             git checkout -- .
-            echo
           done
