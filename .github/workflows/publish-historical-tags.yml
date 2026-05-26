@@ -1,0 +1,43 @@
+name: Reusable Publish Historical Tags
+
+on:
+  workflow_call:
+    inputs:
+      tags:
+        description: 'Comma-separated list of tags to publish (e.g. "1.0.0,1.0.1")'
+        required: true
+        type: string
+
+jobs:
+  publish-tags:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          registry-url: 'https://npm.cnb.cool/GameFrameX/npm/-/packages/'
+
+      - name: Publish each tag
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.CNB_NPM_TOKEN }}
+        run: |
+          IFS=',' read -ra TAGS <<< "${{ inputs.tags }}"
+          for tag in "${TAGS[@]}"; do
+            tag=$(echo "$tag" | xargs)
+            echo "=== Publishing tag: $tag ==="
+            git checkout "$tag"
+
+            npm pkg fix
+            npm publish
+
+            git checkout -- .
+            echo "=== Published $tag ==="
+            echo
+          done
