@@ -29,7 +29,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.CNB_NPM_TOKEN }}
         run: |
           IFS=',' read -ra TAGS <<< "${{ inputs.tags }}"
-          for tag in "${TAGS[@]}"; do
+          # Sort tags in ascending semver order (oldest first)
+          sorted_tags=($(for t in "${TAGS[@]}"; do echo "$t"; done | sed 's/^[[:space:]]*//' | sort -t. -k1,1n -k2,2n -k3,3n))
+          for tag in "${sorted_tags[@]}"; do
             tag=$(echo "$tag" | xargs)
             echo "=== Publishing tag: $tag ==="
             git checkout "$tag"
