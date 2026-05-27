@@ -8,11 +8,6 @@ on:
         required: false
         type: string
         default: ''
-      repository:
-        description: 'Repository to fetch tags from (e.g. "GameFrameX/com.gameframex.unity-network"). Required when auto-detecting tags.'
-        required: false
-        type: string
-        default: ''
 
 jobs:
   publish-tags:
