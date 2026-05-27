@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: ''
+      package_name:
+        description: 'Force override package.json name before publish (e.g. "com.gameframex.unity.network"). Leave empty to use original name.'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   publish-tags:
@@ -55,6 +60,11 @@ jobs:
             git checkout "$tag"
 
             npm pkg fix
+
+            if [ -n "${{ inputs.package_name }}" ]; then
+              node -e "let pkg=require('./package.json'); pkg.name='${{ inputs.package_name }}'; require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2))"
+              echo "Overrode package name to: ${{ inputs.package_name }}"
+            fi
 
             if npm publish --force 2>&1; then
               echo "=== Published $tag ==="
