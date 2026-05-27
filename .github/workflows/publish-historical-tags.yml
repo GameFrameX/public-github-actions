@@ -4,9 +4,15 @@ on:
   workflow_call:
     inputs:
       tags:
-        description: 'Comma-separated list of tags to publish (e.g. "1.0.0,1.0.1")'
-        required: true
+        description: 'Comma-separated list of tags to publish (e.g. "1.0.0,1.0.1"). Leave empty to auto-detect all tags.'
+        required: false
         type: string
+        default: ''
+      repository:
+        description: 'Repository to fetch tags from (e.g. "GameFrameX/com.gameframex.unity-network"). Required when auto-detecting tags.'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   publish-tags:
@@ -24,11 +30,28 @@ jobs:
           node-version: 'lts/*'
           registry-url: 'https://npm.cnb.cool/GameFrameX/npm/-/packages/'
 
+      - name: Resolve tag list
+        id: resolve-tags
+        run: |
+          if [ -n "${{ inputs.tags }}" ]; then
+            echo "Using manually provided tags"
+            echo "tag_list=${{ inputs.tags }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "Auto-detecting all tags from repository..."
+            tags=$(git tag -l | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | sort -t. -k1,1n -k2,2n -k3,3n | tr '\n' ',' | sed 's/,$//')
+            if [ -z "$tags" ]; then
+              echo "::error::No semantic version tags found in repository"
+              exit 1
+            fi
+            echo "Detected tags: $tags"
+            echo "tag_list=$tags" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish each tag
         env:
           NODE_AUTH_TOKEN: ${{ secrets.CNB_NPM_TOKEN }}
         run: |
-          IFS=',' read -ra TAGS <<< "${{ inputs.tags }}"
+          IFS=',' read -ra TAGS <<< "${{ steps.resolve-tags.outputs.tag_list }}"
           sorted_tags=($(for t in "${TAGS[@]}"; do echo "$t"; done | sed 's/^[[:space:]]*//' | sort -t. -k1,1n -k2,2n -k3,3n))
           for tag in "${sorted_tags[@]}"; do
             tag=$(echo "$tag" | xargs)
@@ -38,11 +61,19 @@ jobs:
 
             npm pkg fix
 
-            npm publish --force 2>&1 && echo "=== Published $tag ===" && { git checkout -- .; continue; }
-            
-            echo "Normal publish failed, trying with --tag historical..."
-            npm publish --force --tag historical 2>&1 && echo "=== Published $tag as historical ===" && { git checkout -- .; continue; }
+            if npm publish --force 2>&1; then
+              echo "=== Published $tag ==="
+              git checkout -- .
+              continue
+            fi
 
-            echo "=== FAILED to publish $tag ==="
+            echo "Normal publish failed, trying with --tag historical..."
+            if npm publish --force --tag historical 2>&1; then
+              echo "=== Published $tag as historical ==="
+              git checkout -- .
+              continue
+            fi
+
+            echo "::warning::Failed to publish $tag, skipping..."
             git checkout -- .
           done
