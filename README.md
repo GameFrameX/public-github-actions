@@ -183,7 +183,7 @@ jobs:
 | 获取最新 Tag | `git describe --tags --abbrev=0` | 无 tag 时默认 `0.0.0` |
 | 版本计算 | `paulhatch/semantic-version@v5.4.0` | `BREAKING CHANGE:` → major，`feat` → minor，其余 → patch |
 | 下载共享配置 | `curl ... cliff.toml` | 从本仓库下载统一的 git-cliff 配置，调用方无需维护 |
-| 生成 Changelog | `orhun/git-cliff-action@v4` | 按提交类型（feat/fix/doc 等）分组生成 CHANGELOG.md |
+| 生成 Changelog 与 Release Notes | `orhun/git-cliff-action@v4` | 发布前生成，GitHub API 临时失败时最多重试 3 次 |
 | 更新版本（可选） | `sed` 修改 Version.props | `version_props_path` 非空时才执行 |
 | NuGet 发布（可选） | `dotnet pack` + `dotnet nuget push` | `version_props_path` 非空时才执行 |
 | Docker 构建（可选） | `docker/build-push-action@v6` | `docker_image_name` 非空时才执行，推送到 Docker Hub + GHCR |

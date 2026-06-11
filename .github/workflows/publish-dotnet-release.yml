@@ -86,15 +86,87 @@ jobs:
         if: steps.check.outputs.need_release == 'true'
         run: curl -L https://raw.githubusercontent.com/GameFrameX/public-github-actions/main/cliff.toml -o cliff.toml
 
-      - name: Generate CHANGELOG
+      - name: Generate CHANGELOG (attempt 1)
         if: steps.check.outputs.need_release == 'true'
         uses: orhun/git-cliff-action@v4
-        id: git-cliff
+        id: git-cliff-1
+        continue-on-error: true
         with:
           config: cliff.toml
           args: --tag ${{ steps.version.outputs.version }} --strip header
         env:
           OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Wait before retrying CHANGELOG generation
+        if: steps.check.outputs.need_release == 'true' && steps.git-cliff-1.outcome == 'failure'
+        run: sleep 5
+
+      - name: Generate CHANGELOG (attempt 2)
+        if: steps.check.outputs.need_release == 'true' && steps.git-cliff-1.outcome == 'failure'
+        uses: orhun/git-cliff-action@v4
+        id: git-cliff-2
+        continue-on-error: true
+        with:
+          config: cliff.toml
+          args: --tag ${{ steps.version.outputs.version }} --strip header
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Wait before final CHANGELOG generation attempt
+        if: steps.check.outputs.need_release == 'true' && steps.git-cliff-2.outcome == 'failure'
+        run: sleep 15
+
+      - name: Generate CHANGELOG (attempt 3)
+        if: steps.check.outputs.need_release == 'true' && steps.git-cliff-2.outcome == 'failure'
+        uses: orhun/git-cliff-action@v4
+        id: git-cliff-3
+        with:
+          config: cliff.toml
+          args: --tag ${{ steps.version.outputs.version }} --strip header
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Generate release notes (attempt 1)
+        if: steps.check.outputs.need_release == 'true'
+        id: release-notes-1
+        uses: orhun/git-cliff-action@v4
+        continue-on-error: true
+        with:
+          config: cliff.toml
+          args: --tag ${{ steps.version.outputs.version }} --latest --strip header
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Wait before retrying release notes generation
+        if: steps.check.outputs.need_release == 'true' && steps.release-notes-1.outcome == 'failure'
+        run: sleep 5
+
+      - name: Generate release notes (attempt 2)
+        if: steps.check.outputs.need_release == 'true' && steps.release-notes-1.outcome == 'failure'
+        id: release-notes-2
+        uses: orhun/git-cliff-action@v4
+        continue-on-error: true
+        with:
+          config: cliff.toml
+          args: --tag ${{ steps.version.outputs.version }} --latest --strip header
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Wait before final release notes generation attempt
+        if: steps.check.outputs.need_release == 'true' && steps.release-notes-2.outcome == 'failure'
+        run: sleep 15
+
+      - name: Generate release notes (attempt 3)
+        if: steps.check.outputs.need_release == 'true' && steps.release-notes-2.outcome == 'failure'
+        id: release-notes-3
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --tag ${{ steps.version.outputs.version }} --latest --strip header
+        env:
           GITHUB_REPO: ${{ github.repository }}
 
       # ---- NuGet 发布（可选） ----
@@ -158,16 +230,6 @@ jobs:
 
       # ---- 收尾：提交 + 标签 + Release ----
 
-      - name: Generate release notes (current version only)
-        if: steps.check.outputs.need_release == 'true'
-        id: release-notes
-        uses: orhun/git-cliff-action@v4
-        with:
-          config: cliff.toml
-          args: --tag ${{ steps.version.outputs.version }} --latest --strip header
-        env:
-          GITHUB_REPO: ${{ github.repository }}
-
       - name: Commit changes
         if: steps.check.outputs.need_release == 'true'
         run: |
@@ -188,6 +250,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          body: ${{ steps.release-notes.outputs.changelog }}
+          body: ${{ steps.release-notes-1.outputs.changelog || steps.release-notes-2.outputs.changelog || steps.release-notes-3.outputs.changelog }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
