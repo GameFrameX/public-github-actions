@@ -1,107 +1,186 @@
 # public-github-actions
 
-一套开箱即用的 **GitHub Actions 可复用工作流（Reusable Workflows）**集合，用于统一管理组织/个人仓库的发布、镜像同步等常见流程。
+一套给 GameFrameX 仓库复用的 **GitHub Actions 工作流集合**，用于统一处理发布、历史标签补发、.NET 发布，以及从 GitHub 同步到 Gitee 和 CNB.Cool。
 
-> 所有工作流均通过 [`workflow_call`](https://docs.github.com/en/actions/using-workflows/reusing-workflows) 暴露，调用方只需一行 `uses` 即可接入，无需重复编写 CI 脚本。
+所有工作流都通过 `workflow_call` 暴露。业务仓库只需要保留一层很薄的调用工作流，实际逻辑集中维护在本仓库。
 
----
+## 快速接入
 
-## 🚀 快速开始
-
-1. 在本仓库 **Release** 页面发布一个新版本（或推送 tag），即可自动触发 `release.yml` 生成正式版本。  
-2. 在其他仓库中直接引用下方示例，即可立即拥有「自动发布 + 多平台镜像同步」能力。
-
----
-
-## 📦 可复用工作流一览
-
-| 文件 | 作用 | 入口参数（inputs） | 必需 Secrets / Vars |
-|----|------|------------------|---------------------|
-| [`.github/workflows/release.yml`](.github/workflows/release.yml) | 自动打 Tag、生成 ChangeLog、创建 GitHub Release | 无（自动读取 `package.json` 中的版本） | `GITHUB_TOKEN`（默认已注入） |
-| [`.github/workflows/publish-release.yml`](.github/workflows/publish-release.yml) | 可手动指定 Tag 发布，支持 Unity 项目依赖优化 | `tag_name`, `repository_name` | `GITHUB_TOKEN` |
-| [`.github/workflows/sync.yml`](.github/workflows/sync.yml) | **双 Job 同步**：<br>① `sync-to-gitee`（SSH 密钥）<br>② `sync-to-cnb`（Docker Action + HTTPS） | `target_branch`, `repository_name` | **Gitee**（SSH 模式）：<br>`GITEE_ID_RSA`<br>**CNB**（Token 模式）：<br>`CNB_TOKEN` |
-| [`.github/workflows/publish-dotnet-release.yml`](.github/workflows/publish-dotnet-release.yml) | .NET 项目语义化发布：自动版本 + git-cliff Changelog + NuGet/Docker 可选发布 + GitHub Release | `dotnet_version`, `version_props_path`, `nuget_source`, `docker_image_name`, `docker_platforms`, `docker_context` | `GITHUB_TOKEN`<br>**NuGet**：<br>`NUGET_API_KEY`<br>**Docker**：<br>`DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `DOCKERHUB_ORGANIZATION` |
-
----
-
-## 🔧 调用示例
-
-### 1. 自动发布 Release
+在业务仓库的 `.github/workflows/` 中添加调用文件，例如镜像同步：
 
 ```yaml
-name: Release
+name: Sync Github To Image (External)
+
 on:
   push:
-    tags: [ 'v*' ]
+    branches:
+      - '**'
+    tags-ignore:
+      - '**'
+  workflow_run:
+    workflows: ["Publish Release"]
+    types:
+      - completed
+  workflow_dispatch:
 
 jobs:
-  call:
-    uses: your-org/public-github-actions/.github/workflows/release.yml@main
-    secrets: inherit   # 自动继承 GITHUB_TOKEN
-```
-
-### 2. 同步到 Gitee（SSH 密钥）
-
-```yaml
-name: Mirror
-on:
-  push:
-    branches: [ main, develop ]
-
-jobs:
-  sync:
-    uses: your-org/public-github-actions/.github/workflows/sync.yml@main
+  sync-gitee:
+    uses: GameFrameX/public-github-actions/.github/workflows/sync.yml@main
     with:
       target_branch: ${{ github.ref_name }}
       repository_name: ${{ github.repository }}
-    secrets: inherit   # 需提前在组织/仓库设置 GITEE_ID_RSA
+    secrets: inherit
 ```
 
-### 3. 同步到 CNB（Token 模式）
+## 可复用工作流
+
+| 文件 | 作用 | Inputs | Secrets / Vars |
+| --- | --- | --- | --- |
+| [`.github/workflows/publish-release.yml`](.github/workflows/publish-release.yml) | Unity/通用仓库发布：按传入分支或 tag 执行 semantic-release，生成 changelog、tag、GitHub Release，并可发布到 CNB npm | `tag_name`, `repository_name` | `GITHUB_TOKEN`, `CNB_NPM_TOKEN` |
+| [`.github/workflows/publish-historical-tags.yml`](.github/workflows/publish-historical-tags.yml) | 手动补发历史 tag 的 Release | `tags` | `GITHUB_TOKEN` |
+| [`.github/workflows/sync.yml`](.github/workflows/sync.yml) | 双 Job 镜像同步：自动读取 GitHub 仓库元数据，按需创建 Gitee/CNB 仓库，同步描述、站点、主题，并推送代码和 tags | `target_branch`, `repository_name` | `GITHUB_TOKEN`; Gitee: `GITEE_GITHUB_ACTION_SYNC_TOKEN`, `GITEE_ID_RSA`; CNB: `CNB_SYNC_TOKEN`; Vars: `GIT_USER_EMAIL`, `GIT_USER_NAME`, `GITEE_DOMAIN_URL` |
+| [`.github/workflows/publish-dotnet-release.yml`](.github/workflows/publish-dotnet-release.yml) | .NET 语义化发布：计算版本、生成 changelog、可选更新 Version.props、发布 NuGet、构建并推送 Docker 镜像、创建 GitHub Release | `dotnet_version`, `version_props_path`, `nuget_source`, `docker_image_name`, `docker_platforms`, `docker_context` | `GITHUB_TOKEN`; NuGet: `NUGET_API_KEY`; Docker: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `DOCKERHUB_ORGANIZATION` |
+
+## Sync 工作流行为
+
+`sync.yml` 是当前镜像体系的主流程。Gitee 和 CNB 的仓库创建、描述信息同步、代码同步都优先由这个工作流完成。
+
+### 读取 GitHub 元数据
+
+两个同步 Job 都会先通过 `gh repo view` 读取主仓库信息：
+
+- `description`
+- `homepageUrl`
+- `repositoryTopics`
+
+这些信息作为 Gitee 和 CNB 的同步源。也就是说，仓库描述、网站和 topics 应优先在 GitHub 主仓库维护，再由同步工作流分发到镜像平台。
+
+### Gitee 同步
+
+`sync-to-gitee` 会执行以下动作：
+
+1. 使用 `GITEE_GITHUB_ACTION_SYNC_TOKEN` 查询 `GameFrameX/{repo}` 是否存在。
+2. 仓库不存在时，通过 Gitee API 创建公开仓库。
+3. 仓库已存在时，比较 Gitee 的 `description`、`homepage` 与 GitHub 是否一致。
+4. 新建仓库或信息不一致时，通过 PATCH API 更新描述和网站。
+5. 使用 `GITEE_ID_RSA` 配置 SSH。
+6. 添加远端 `git@${GITEE_DOMAIN_URL}:${repository_name}.git`。
+7. 强制推送当前分支，并同步 tags。
+
+### CNB 同步
+
+`sync-to-cnb` 会执行以下动作：
+
+1. 使用 `CNB_SYNC_TOKEN` 查询 `gameframex/{repo}` 是否存在。
+2. 仓库不存在时，通过 CNB API 创建公开仓库。
+3. 仓库已存在时，比较 CNB 的 `description`、`site`、`topics` 与 GitHub 是否一致。
+4. 新建仓库或信息不一致时，通过 PATCH API 更新描述、站点和 topics。
+5. topics 会过滤为长度不超过 12 的项目，并最多保留 12 个。
+6. 使用 `docker://tencentcom/git-sync` 同步到 `https://cnb.cool/${repository_name}.git`。
+7. 同步模式为 `rebase`，启用强制同步和 tags 推送。
+
+## Secrets 和 Variables
+
+### GitHub
+
+`GITHUB_TOKEN` 由 GitHub Actions 默认注入。调用方使用 `secrets: inherit` 即可。
+
+### Gitee
+
+需要在组织或仓库配置：
+
+- Secret: `GITEE_GITHUB_ACTION_SYNC_TOKEN`
+  - 用于查询、创建、更新 Gitee 仓库信息。
+- Secret: `GITEE_ID_RSA`
+  - 用于 SSH 推送代码到 Gitee。
+- Variable: `GITEE_DOMAIN_URL`
+  - 通常为 `gitee.com`。
+- Variable: `GIT_USER_EMAIL`
+  - 用于 Git 提交/推送环境配置。
+- Variable: `GIT_USER_NAME`
+  - 用于 Git 提交/推送环境配置。
+
+### CNB
+
+需要在组织或仓库配置：
+
+- Secret: `CNB_SYNC_TOKEN`
+  - 用于查询、创建、更新 CNB 仓库，并作为 `git-sync` 的 HTTPS token。
+
+### 发布
+
+按需配置：
+
+- `CNB_NPM_TOKEN`
+- `NUGET_API_KEY`
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+- `DOCKERHUB_ORGANIZATION`
+
+## 调用示例
+
+### 发布 Release
 
 ```yaml
-name: Mirror-CNB
+name: Publish Release
+
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
-  sync:
-    uses: your-org/public-github-actions/.github/workflows/sync.yml@main
+  publish-release:
+    uses: GameFrameX/public-github-actions/.github/workflows/publish-release.yml@main
     with:
-      target_branch: main
-      repository_name: owner/repo
-    secrets:
-      CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+      tag_name: ${{ github.ref_name }}
+      repository_name: ${{ github.repository }}
+    secrets: inherit
 ```
 
-### 4. .NET 项目自动发布
+### 补发历史 Tags
 
-#### NuGet 包发布（如 Foundation、Server.Source）
+```yaml
+name: Publish Historical Tags
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish-historical-tags:
+    uses: GameFrameX/public-github-actions/.github/workflows/publish-historical-tags.yml@main
+    with:
+      tags: ''
+    secrets: inherit
+```
+
+### .NET 包发布
 
 ```yaml
 name: Release
+
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   release:
     uses: GameFrameX/public-github-actions/.github/workflows/publish-dotnet-release.yml@main
     with:
-      dotnet_version: "8.0.x 9.0.x 10.0.x"
+      dotnet_version: "10.0.x"
       version_props_path: "Version.props"
     secrets: inherit
 ```
 
-#### Docker 镜像发布（如 Tools）
+### Docker 镜像发布
 
 ```yaml
 name: Release
+
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -113,94 +192,19 @@ jobs:
     secrets: inherit
 ```
 
-> NuGet 和 Docker 可同时启用，按需组合参数即可。未提供的选项自动跳过。
+## 主流程和兜底流程
 
----
+GameFrameX 仓库的推荐流程是：
 
-## 🔑 密钥 & 变量准备
+1. 在 GitHub 主仓库维护 description、homepage 和 topics。
+2. 业务仓库引用本仓库的 `sync.yml`。
+3. 由 `sync.yml` 自动创建或更新 Gitee/CNB 镜像仓库。
+4. 仅当 Actions 无法完成自动创建、平台 API 异常、token 权限异常、历史仓库状态不一致时，再使用本地 Skill 做手动修复。
 
-### Gitee SSH 模式
-1. 生成密钥：`ssh-keygen -t rsa -b 4096 -C "ci@example.com"`
-2. 将公钥添加到 Gitee 仓库「部署公钥」
-3. 在 GitHub **Settings → Secrets and variables → Actions** 新建 `GITEE_ID_RSA`，粘贴完整私钥内容
-4. 在 **Variables** 新建 `GITEE_DOMAIN_URL`（如 `gitee.com`）
+因此，Gitee/CNB 平台侧的独立 Skill 不再属于常规主流程能力，而是故障修复和一次性兜底工具。
 
-### CNB Token 模式
-1. 在 CNB 平台生成 **Personal Access Token**
-2. 在 GitHub **Settings → Secrets and variables → Actions** 新建 `CNB_TOKEN`，粘贴 Token 内容
+## 维护说明
 
----
-
-## � 工作流实现流程详解
-
-### 1️⃣ publish-release.yml（手动指定 Tag 发布）
-
-| 步骤 | 关键脚本/动作 | 实现要点 |
-|----|-------------|---------|
-| 检出代码 | `actions/checkout@v6` | `fetch-depth: 0` 保证拿到完整历史，`persist-credentials: false` 强制使用 `GITHUB_TOKEN` 做后续推送，避免权限叠加 |
-| 强制拉取标签 | `git fetch --tags --force` | 解决本地与远端标签冲突导致的 "would clobber existing tag" 报错 |
-| 安装依赖 | `npm install` | 临时删除 `package.json` 中的 `dependencies` 字段，防止 npm 尝试安装不存在的 Unity 私有依赖；安装完毕再还原文件，保证发布时仍携带依赖声明 |
-| 下载共享配置 | `curl -L https://raw.githubusercontent.com/GameFrameX/public-github-actions/main/.releaserc -o .releaserc` | 统一集中管理 `semantic-release` 配置，调用方无需在每个仓库维护 `.releaserc` |
-| 语义化发布 | `npx semantic-release` | 按 `.releaserc` 定义执行：<br>① 分析提交 → ② 生成 Release Notes → ③ 打 Tag → ④ 生成/更新 `CHANGELOG.md` → ⑤ 推送到 GitHub Releases → ⑥ 发布到 cnb.cool npm（`CNB_NPM_TOKEN`） |
-
-> 权限声明：`contents: write`（写标签/Release）、`packages: write`（发布 npm）、`checks: write`（状态回写）
-
----
-
-### 2️⃣ sync.yml（双 Job 镜像同步）
-
-#### Job① sync-to-gitee（SSH 模式）
-
-| 步骤 | 关键脚本/动作 | 实现要点 |
-|----|-------------|---------|
-| 检出代码 | `actions/checkout@v6` | `fetch-depth: 0` 获取完整历史 |
-| 注入 SSH 私钥 | `echo "$GITEE_ID_RSA" > ~/.ssh/id_rsa` | 600 权限 + `ssh-agent` 加载，私钥不落盘 |
-| 信任域名 | `ssh-keyscan -H $GITEE_DOMAIN_URL >> ~/.ssh/known_hosts` | 防止首次连接出现 "Are you sure you want to continue connecting" 中断 |
-| 添加远端 | `git remote add mirror git@$GITEE_DOMAIN_URL:$repository_name.git` | 使用 SSH 格式，免账号密码 |
-| 强制推送 | `git push -f mirror $branch --tags` | 保持与 GitHub 完全一致的分支与标签映射 |
-
-#### Job② sync-to-cnb（Docker Action 模式）
-
-| 阶段 | 关键配置 | 实现要点 |
-|----|---------|---------|
-| Docker Action | `docker://tencentcom/git-sync` | 使用腾讯云官方镜像同步工具，简化配置 |
-| 目标地址 | `PLUGIN_TARGET_URL: https://cnb.cool/{repo}.git` | 使用 HTTPS 协议，目标仓库地址 |
-| 认证方式 | `PLUGIN_AUTH_TYPE: https` + `PLUGIN_PASSWORD` | Token 认证，安全简洁 |
-| 同步模式 | `PLUGIN_SYNC_MODE: rebase` | 使用 rebase 模式同步，保持提交历史整洁 |
-| 标签同步 | `PLUGIN_PUSH_TAGS: true` | 自动同步所有标签 |
-| 强制推送 | `PLUGIN_FORCE: true` | 覆盖远端不一致的历史 |
-
-> 两 Job 并发执行，互不干扰；调用方通过是否提供对应 Secrets 即可「无感」切换目标平台。
-
----
-
-### 3️⃣ publish-dotnet-release.yml（.NET 项目语义化发布）
-
-| 步骤 | 关键脚本/动作 | 实现要点 |
-|----|-------------|---------|
-| 检出代码 | `actions/checkout@v6` | `fetch-depth: 0` 获取完整历史 |
-| Setup .NET | `actions/setup-dotnet@v4` | 支持多版本 SDK（空格分隔） |
-| 获取最新 Tag | `git describe --tags --abbrev=0` | 无 tag 时默认 `0.0.0` |
-| 版本计算 | `paulhatch/semantic-version@v5.4.0` | `BREAKING CHANGE:` → major，`feat` → minor，其余 → patch |
-| 下载共享配置 | `curl ... cliff.toml` | 从本仓库下载统一的 git-cliff 配置，调用方无需维护 |
-| 生成 Changelog 与 Release Notes | `orhun/git-cliff-action@v4` | 发布前生成，GitHub API 临时失败时最多重试 3 次 |
-| 更新版本（可选） | `sed` 修改 Version.props | `version_props_path` 非空时才执行 |
-| NuGet 发布（可选） | `dotnet pack` + `dotnet nuget push` | `version_props_path` 非空时才执行 |
-| Docker 构建（可选） | `docker/build-push-action@v6` | `docker_image_name` 非空时才执行，推送到 Docker Hub + GHCR |
-| 推送变更 | `git push` + `git tag` | 推送 changelog 提交和版本标签 |
-| 创建 Release | `softprops/action-gh-release@v2` | 以 CHANGELOG.md 作为 Release Notes |
-
----
-
-## �📚 更多说明
-
-- **ChangeLog 生成逻辑**：Unity 项目基于 [conventional-changelog](https://github.com/conventional-changelog/conventional-changelog)，.NET 项目基于 [git-cliff](https://git-cliff.org/)。请使用 [Conventional Commits](https://www.conventionalcommits.org/) 规范提交信息。
-- **共享配置文件**：`.releaserc`（Unity）和 `cliff.toml`（.NET）均在本仓库集中维护，调用方通过 curl 下载即可，确保所有仓库的 CHANGELOG 格式统一。
-- **镜像同步频率**：建议 `on.push` 触发即可，也可改为 `schedule` 定时同步。
-- **权限最小化**：所有工作流已声明最小权限集合，调用方无需额外配置。
-
----
-
-## 🤝 贡献 & 反馈
-
-欢迎提交 Issue 或 PR 来完善这套工作流模板，让更多人「一行 `uses` 搞定发布与同步」！
+- 修改同步逻辑时，优先修改 `.github/workflows/sync.yml`，再同步更新本 README。
+- 修改发布逻辑时，保持业务仓库模板只做薄调用，避免把实现逻辑复制到每个仓库。
+- 镜像仓库的元数据源头是 GitHub 主仓库；不要在 Gitee/CNB 长期维护不同的描述信息。
