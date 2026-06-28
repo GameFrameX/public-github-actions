@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  sync-gitee:
+  sync-mirrors:
     uses: GameFrameX/public-github-actions/.github/workflows/sync.yml@main
     with:
       target_branch: ${{ github.ref_name }}
@@ -36,8 +36,8 @@ jobs:
 
 | 文件 | 作用 | Inputs | Secrets / Vars |
 | --- | --- | --- | --- |
-| [`.github/workflows/publish-release.yml`](.github/workflows/publish-release.yml) | Unity/通用仓库发布：按传入分支或 tag 执行 semantic-release，生成 changelog、tag、GitHub Release，并可发布到 CNB npm | `tag_name`, `repository_name` | `GITHUB_TOKEN`, `CNB_NPM_TOKEN` |
-| [`.github/workflows/publish-historical-tags.yml`](.github/workflows/publish-historical-tags.yml) | 手动补发历史 tag 的 Release | `tags` | `GITHUB_TOKEN` |
+| [`.github/workflows/publish-release.yml`](.github/workflows/publish-release.yml) | Unity/通用仓库发布：下载共享 `.releaserc`，在 `main` 分支运行 semantic-release，生成 changelog、tag、GitHub Release，并可发布到 CNB npm | `tag_name`, `repository_name` | `GITHUB_TOKEN`, `CNB_NPM_TOKEN` |
+| [`.github/workflows/publish-historical-tags.yml`](.github/workflows/publish-historical-tags.yml) | 手动或自动枚举历史语义化 tag，并逐个执行 `npm publish` 到 CNB npm | `tags` | `CNB_NPM_TOKEN` |
 | [`.github/workflows/sync.yml`](.github/workflows/sync.yml) | 双 Job 镜像同步：自动读取 GitHub 仓库元数据，按需创建 Gitee/CNB 仓库，同步描述、站点、主题，并推送代码和 tags | `target_branch`, `repository_name` | `GITHUB_TOKEN`; Gitee: `GITEE_GITHUB_ACTION_SYNC_TOKEN`, `GITEE_ID_RSA`; CNB: `CNB_SYNC_TOKEN`; Vars: `GIT_USER_EMAIL`, `GIT_USER_NAME`, `GITEE_DOMAIN_URL` |
 | [`.github/workflows/publish-dotnet-release.yml`](.github/workflows/publish-dotnet-release.yml) | .NET 语义化发布：计算版本、生成 changelog、可选更新 Version.props、发布 NuGet、构建并推送 Docker 镜像、创建 GitHub Release | `dotnet_version`, `version_props_path`, `nuget_source`, `docker_image_name`, `docker_platforms`, `docker_context` | `GITHUB_TOKEN`; NuGet: `NUGET_API_KEY`; Docker: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `DOCKERHUB_ORGANIZATION` |
 
@@ -71,11 +71,11 @@ jobs:
 
 `sync-to-cnb` 会执行以下动作：
 
-1. 使用 `CNB_SYNC_TOKEN` 查询 `gameframex/{repo}` 是否存在。
+1. 使用 `CNB_SYNC_TOKEN` 调用 CNB `GetByID` 接口查询 `gameframex/{repo}` 是否存在。
 2. 仓库不存在时，通过 CNB API 创建公开仓库。
 3. 仓库已存在时，比较 CNB 的 `description`、`site`、`topics` 与 GitHub 是否一致。
-4. 新建仓库或信息不一致时，通过 PATCH API 更新描述、站点和 topics。
-5. topics 会过滤为长度不超过 12 的项目，并最多保留 12 个。
+4. 新建仓库或信息不一致时，调用 CNB `UpdateRepo` 接口更新描述、站点和 topics。
+5. 写入 CNB 时 topics 会过滤为长度不超过 12 的项目，并最多保留 12 个；读取 CNB 当前 topics 时兼容字符串和数组两种返回形态。
 6. 使用 `docker://tencentcom/git-sync` 同步到 `https://cnb.cool/${repository_name}.git`。
 7. 同步模式为 `rebase`，启用强制同步和 tags 推送。
 
