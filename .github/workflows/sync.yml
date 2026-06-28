@@ -227,15 +227,23 @@ jobs:
 
             # 比较当前信息与 GitHub 是否一致
             CURRENT_DESC=$(echo "$BODY" | jq -r '.description // ""')
-            CURRENT_SITE=$(echo "$BODY" | jq -r '.site_url // ""')
-            CURRENT_TOPICS=$(echo "$BODY" | jq -c 'if (.topics | type) == "array" then (.topics | sort) else [] end')
+            CURRENT_SITE=$(echo "$BODY" | jq -r '.site // ""')
+            CURRENT_TOPICS=$(echo "$BODY" | jq -c '
+              if (.topics | type) == "array" then
+                [.topics[] | tostring]
+              elif (.topics | type) == "string" then
+                (.topics | if . == "" then [] else split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) end)
+              else
+                []
+              end | sort
+            ')
             SORTED_GH_TOPICS=$(echo "$GH_TOPICS" | jq -c '[.[] | select(length <= 12)][:12] | sort')
             NEEDS_UPDATE="false"
 
             if [ "$CURRENT_DESC" != "$GH_DESC" ] || [ "$CURRENT_SITE" != "$GH_SITE" ] || [ "$CURRENT_TOPICS" != "$SORTED_GH_TOPICS" ]; then
               NEEDS_UPDATE="true"
               echo "  description: '${CURRENT_DESC}' -> '${GH_DESC}'"
-              echo "  site_url: '${CURRENT_SITE}' -> '${GH_SITE}'"
+              echo "  site: '${CURRENT_SITE}' -> '${GH_SITE}'"
               echo "  topics: ${CURRENT_TOPICS} -> ${SORTED_GH_TOPICS}"
             fi
             echo "needs_update=${NEEDS_UPDATE}" >> $GITHUB_OUTPUT
