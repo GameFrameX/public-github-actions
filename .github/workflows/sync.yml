@@ -1,6 +1,6 @@
 # 这个文件应该放在外部仓库的 .github/workflows/ 目录下
 
-name: Reusable Sync to Gitee Workflow
+name: Reusable Sync Workflow
 
 on:
   workflow_call:
@@ -13,9 +13,30 @@ on:
         description: '仓库名称 (格式: owner/repo)'
         required: true
         type: string
+      enable_gitee:
+        description: '是否同步到 Gitee'
+        required: false
+        type: boolean
+        default: true
+      enable_cnb:
+        description: '是否同步到 CNB'
+        required: false
+        type: boolean
+        default: true
+      gitee_private:
+        description: '自动创建 Gitee 仓库时是否创建为私有仓库'
+        required: false
+        type: boolean
+        default: false
+      cnb_visibility:
+        description: '自动创建 CNB 仓库时使用的可见性'
+        required: false
+        type: string
+        default: public
 
 jobs:
   sync-to-gitee:
+    if: ${{ inputs.enable_gitee }}
     runs-on: ubuntu-latest
 
     steps:
@@ -56,6 +77,7 @@ jobs:
           REPO: ${{ steps.info.outputs.repo_name }}
           GH_DESC: ${{ steps.info.outputs.description }}
           GH_SITE: ${{ steps.info.outputs.site_url }}
+          GITEE_PRIVATE: ${{ inputs.gitee_private }}
         run: |
           if [ -z "$GITEE_TOKEN" ]; then
             echo "GITEE_GITHUB_ACTION_SYNC_TOKEN not configured, skipping"
@@ -77,7 +99,7 @@ jobs:
               -d "{
                 \"access_token\": \"${GITEE_TOKEN}\",
                 \"name\": \"${REPO}\",
-                \"private\": false,
+                \"private\": ${GITEE_PRIVATE},
                 \"auto_init\": false
               }" > /dev/null 2>&1 || true
             echo "created=true" >> $GITHUB_OUTPUT
@@ -158,6 +180,7 @@ jobs:
           fi
 
   sync-to-cnb:
+    if: ${{ inputs.enable_cnb }}
     runs-on: ubuntu-latest
 
     steps:
@@ -194,6 +217,7 @@ jobs:
           GH_DESC: ${{ steps.info.outputs.description }}
           GH_SITE: ${{ steps.info.outputs.site_url }}
           GH_TOPICS: ${{ steps.info.outputs.topics_json }}
+          CNB_VISIBILITY: ${{ inputs.cnb_visibility }}
         run: |
           if [ -z "$CNB_TOKEN" ]; then
             echo "CNB_SYNC_TOKEN not configured, skipping"
@@ -217,7 +241,7 @@ jobs:
               -H "Content-Type: application/json" \
               -d "{
                 \"name\": \"${REPO}\",
-                \"visibility\": \"public\"
+                \"visibility\": \"${CNB_VISIBILITY}\"
               }" > /dev/null 2>&1 || true
             echo "created=true" >> $GITHUB_OUTPUT
             echo "needs_update=false" >> $GITHUB_OUTPUT
