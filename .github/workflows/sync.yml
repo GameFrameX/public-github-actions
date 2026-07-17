@@ -67,7 +67,7 @@ jobs:
           SITE_URL=$(jq -r '.homepageUrl // ""' /tmp/gh_repo.json)
           echo "site_url=${SITE_URL}" >> $GITHUB_OUTPUT
 
-          TOPICS_JSON=$(jq -c '[.repositoryTopics[] | if type == "object" then .name else . end]' /tmp/gh_repo.json)
+          TOPICS_JSON=$(jq -c '[(.repositoryTopics // [])[] | if type == "object" then .name else . end]' /tmp/gh_repo.json)
           echo "topics_json=${TOPICS_JSON}" >> $GITHUB_OUTPUT
 
       - name: Init repo
@@ -208,7 +208,7 @@ jobs:
           SITE_URL=$(jq -r '.homepageUrl // ""' /tmp/gh_repo.json)
           echo "site_url=${SITE_URL}" >> $GITHUB_OUTPUT
 
-          TOPICS_JSON=$(jq -c '[.repositoryTopics[] | if type == "object" then .name else . end]' /tmp/gh_repo.json)
+          TOPICS_JSON=$(jq -c '[(.repositoryTopics // [])[] | if type == "object" then .name else . end]' /tmp/gh_repo.json)
           echo "topics_json=${TOPICS_JSON}" >> $GITHUB_OUTPUT
 
       - name: Init repo
