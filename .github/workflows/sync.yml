@@ -182,6 +182,8 @@ jobs:
   sync-to-cnb:
     if: ${{ inputs.enable_cnb }}
     runs-on: ubuntu-latest
+    env:
+      CNB_SYNC_TOKEN_PRESENT: ${{ secrets.CNB_SYNC_TOKEN != '' }}
 
     steps:
       - name: Checkout code
@@ -302,6 +304,7 @@ jobs:
           fi
 
       - name: Sync to CNB Repository
+        if: env.CNB_SYNC_TOKEN_PRESENT == 'true'
         uses: docker://tencentcom/git-sync
         env:
           PLUGIN_TARGET_URL: "https://cnb.cool/${{ inputs.repository_name }}.git"
