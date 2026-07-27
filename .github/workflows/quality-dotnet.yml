@@ -1,0 +1,135 @@
+name: Reusable .NET Quality Workflow
+
+on:
+  workflow_call:
+    inputs:
+      dotnet_version:
+        description: ".NET SDK version"
+        required: false
+        default: "10.0.x"
+        type: string
+      working_directory:
+        description: "Directory containing the solution"
+        required: false
+        default: "."
+        type: string
+      solution_path:
+        description: "Solution path relative to working_directory. Auto-detected when empty."
+        required: false
+        default: ""
+        type: string
+      build_configuration:
+        description: "Build configuration"
+        required: false
+        default: "Release"
+        type: string
+      run_tests:
+        description: "Run dotnet test"
+        required: false
+        default: true
+        type: boolean
+      sonar_project_key:
+        description: "SonarQube project key. Empty disables Sonar analysis."
+        required: false
+        default: ""
+        type: string
+      sonar_host_url:
+        description: "SonarQube host URL"
+        required: false
+        default: "https://sonarcloud.io"
+        type: string
+      sonar_organization:
+        description: "SonarQube Cloud organization. Empty for SonarQube Server."
+        required: false
+        default: "GameFrameX"
+        type: string
+    secrets:
+      SONAR_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  quality-dotnet:
+    name: quality-dotnet
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+
+      - name: Resolve solution
+        id: solution
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          solution="${{ inputs.solution_path }}"
+          if [ -z "$solution" ]; then
+            solution="$(find . -maxdepth 2 \( -name '*.slnx' -o -name '*.sln' \) | sort | head -n 1)"
+          fi
+
+          if [ -z "$solution" ]; then
+            echo "No .slnx or .sln file found"
+            exit 1
+          fi
+
+          echo "path=$solution" >> "$GITHUB_OUTPUT"
+          echo "Resolved solution: $solution"
+
+      - name: Install SonarScanner for .NET
+        if: ${{ inputs.sonar_project_key != '' }}
+        shell: bash
+        run: dotnet tool install --global dotnet-sonarscanner
+
+      - name: Begin Sonar analysis
+        if: ${{ inputs.sonar_project_key != '' }}
+        shell: bash
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          args=(
+            "/k:${{ inputs.sonar_project_key }}"
+            "/d:sonar.host.url=${{ inputs.sonar_host_url }}"
+            "/d:sonar.token=$SONAR_TOKEN"
+          )
+
+          if [ -n "${{ inputs.sonar_organization }}" ]; then
+            args+=("/o:${{ inputs.sonar_organization }}")
+          fi
+
+          dotnet sonarscanner begin "${args[@]}"
+
+      - name: Restore
+        shell: bash
+        run: dotnet restore "${{ steps.solution.outputs.path }}"
+
+      - name: Build
+        shell: bash
+        run: dotnet build "${{ steps.solution.outputs.path }}" --configuration "${{ inputs.build_configuration }}" --no-restore
+
+      - name: Test
+        if: ${{ inputs.run_tests }}
+        shell: bash
+        run: dotnet test "${{ steps.solution.outputs.path }}" --configuration "${{ inputs.build_configuration }}" --no-restore --no-build
+
+      - name: End Sonar analysis
+        if: ${{ inputs.sonar_project_key != '' }}
+        shell: bash
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"

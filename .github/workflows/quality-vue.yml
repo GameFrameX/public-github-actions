@@ -1,0 +1,127 @@
+name: Reusable Vue Quality Workflow
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: "Node.js version"
+        required: false
+        default: "22"
+        type: string
+      pnpm_version:
+        description: "pnpm version"
+        required: false
+        default: "11.5.2"
+        type: string
+      working_directory:
+        description: "Directory containing package.json"
+        required: false
+        default: "."
+        type: string
+      install_command:
+        description: "Install command"
+        required: false
+        default: "pnpm install --frozen-lockfile"
+        type: string
+      lint_command:
+        description: "Lint command"
+        required: false
+        default: "pnpm run lint"
+        type: string
+      typecheck_command:
+        description: "Typecheck command"
+        required: false
+        default: "pnpm run typecheck"
+        type: string
+      build_command:
+        description: "Build command"
+        required: false
+        default: "pnpm run build"
+        type: string
+      frontend_check_command:
+        description: "Frontend standards command. Empty disables this step."
+        required: false
+        default: "pnpm run check:frontend"
+        type: string
+      sonar_project_key:
+        description: "SonarQube project key. Empty disables Sonar analysis."
+        required: false
+        default: ""
+        type: string
+      sonar_host_url:
+        description: "SonarQube host URL"
+        required: false
+        default: "https://sonarcloud.io"
+        type: string
+      sonar_organization:
+        description: "SonarQube Cloud organization"
+        required: false
+        default: "GameFrameX"
+        type: string
+    secrets:
+      SONAR_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  quality-vue:
+    name: quality-vue
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm_version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: pnpm
+          cache-dependency-path: ${{ inputs.working_directory }}/pnpm-lock.yaml
+
+      - name: Install dependencies
+        shell: bash
+        run: ${{ inputs.install_command }}
+
+      - name: Lint
+        shell: bash
+        run: ${{ inputs.lint_command }}
+
+      - name: Typecheck
+        shell: bash
+        run: ${{ inputs.typecheck_command }}
+
+      - name: Build
+        shell: bash
+        run: ${{ inputs.build_command }}
+
+      - name: Frontend standards
+        if: ${{ inputs.frontend_check_command != '' }}
+        shell: bash
+        run: ${{ inputs.frontend_check_command }}
+
+      - name: SonarQube scan
+        if: ${{ inputs.sonar_project_key != '' }}
+        uses: SonarSource/sonarqube-scan-action@v8.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ inputs.sonar_host_url }}
+        with:
+          projectBaseDir: ${{ inputs.working_directory }}
+          args: >
+            -Dsonar.projectKey=${{ inputs.sonar_project_key }}
+            -Dsonar.organization=${{ inputs.sonar_organization }}
+            -Dsonar.sourceEncoding=UTF-8

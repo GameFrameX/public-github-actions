@@ -1,0 +1,142 @@
+name: Reusable Unity Package Quality Workflow
+
+on:
+  workflow_call:
+    inputs:
+      package_root:
+        description: "Directory containing Unity packages"
+        required: false
+        default: "Packages"
+        type: string
+      package_glob:
+        description: "Package directory glob below package_root"
+        required: false
+        default: "com.gameframex.unity*"
+        type: string
+      require_multilingual_readme:
+        description: "Require README.md plus zh-CN, zh-TW, ja and ko files"
+        required: false
+        default: true
+        type: boolean
+      require_unity_meta:
+        description: "Require .meta files for README files and package.json"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  quality-unity-package:
+    name: quality-unity-package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check Unity package metadata
+        shell: bash
+        env:
+          PACKAGE_ROOT: ${{ inputs.package_root }}
+          PACKAGE_GLOB: ${{ inputs.package_glob }}
+          REQUIRE_MULTILINGUAL_README: ${{ inputs.require_multilingual_readme }}
+          REQUIRE_UNITY_META: ${{ inputs.require_unity_meta }}
+        run: |
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          package_root = Path(os.environ["PACKAGE_ROOT"])
+          package_glob = os.environ["PACKAGE_GLOB"]
+          require_multilingual = os.environ["REQUIRE_MULTILINGUAL_README"].lower() == "true"
+          require_meta = os.environ["REQUIRE_UNITY_META"].lower() == "true"
+
+          required_package_fields = [
+              "name",
+              "displayName",
+              "description",
+              "version",
+              "unity",
+              "author",
+              "repository",
+          ]
+          required_readmes = [
+              "README.md",
+              "README.zh-CN.md",
+              "README.zh-TW.md",
+              "README.ja.md",
+              "README.ko.md",
+          ]
+          semver = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+
+          packages = sorted(Path(p) for p in glob.glob(str(package_root / package_glob)) if Path(p).is_dir())
+          failures = []
+
+          if not packages:
+              failures.append(f"No packages matched {package_root / package_glob}")
+
+          for package_dir in packages:
+              package_json = package_dir / "package.json"
+              if not package_json.exists():
+                  failures.append(f"{package_dir}: missing package.json")
+                  continue
+
+              try:
+                  data = json.loads(package_json.read_text(encoding="utf-8"))
+              except Exception as exc:
+                  failures.append(f"{package_json}: invalid JSON: {exc}")
+                  continue
+
+              for field in required_package_fields:
+                  if field not in data or data[field] in ("", None):
+                      failures.append(f"{package_json}: missing required field {field}")
+
+              name = str(data.get("name", ""))
+              if not name.startswith("com.gameframex.unity"):
+                  failures.append(f"{package_json}: name must start with com.gameframex.unity")
+
+              version = str(data.get("version", ""))
+              if version and not semver.match(version):
+                  failures.append(f"{package_json}: version is not semver: {version}")
+
+              repository = data.get("repository")
+              if not isinstance(repository, dict) or not repository.get("url") or not repository.get("type"):
+                  failures.append(f"{package_json}: repository must include url and type")
+
+              for filename in ["LICENSE.md", "CHANGELOG.md"]:
+                  if not (package_dir / filename).exists():
+                      failures.append(f"{package_dir}: missing {filename}")
+
+              if require_multilingual:
+                  readmes = required_readmes
+              else:
+                  readmes = ["README.md"]
+
+              for filename in readmes:
+                  path = package_dir / filename
+                  if not path.exists():
+                      failures.append(f"{package_dir}: missing {filename}")
+                      continue
+                  if require_meta and not Path(str(path) + ".meta").exists():
+                      failures.append(f"{path}: missing .meta")
+
+              if require_meta and not Path(str(package_json) + ".meta").exists():
+                  failures.append(f"{package_json}: missing .meta")
+
+          if failures:
+              print("Unity package quality check failed:")
+              for failure in failures:
+                  print(f"- {failure}")
+              sys.exit(1)
+
+          print(f"Unity package quality check passed: {len(packages)} package(s)")
+          PY
