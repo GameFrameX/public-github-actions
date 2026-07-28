@@ -40,6 +40,9 @@ jobs:
 | [`.github/workflows/publish-historical-tags.yml`](.github/workflows/publish-historical-tags.yml) | 手动或自动枚举历史语义化 tag，并逐个执行 `npm publish` 到 CNB npm | `tags` | `CNB_NPM_TOKEN` |
 | [`.github/workflows/sync.yml`](.github/workflows/sync.yml) | 双 Job 镜像同步：自动读取 GitHub 仓库元数据，按需创建 Gitee/CNB 仓库，同步描述、站点、主题，并推送代码和 tags | `target_branch`, `repository_name` | `GITHUB_TOKEN`; Gitee: `GITEE_GITHUB_ACTION_SYNC_TOKEN`, `GITEE_ID_RSA`; CNB: `CNB_SYNC_TOKEN`; Vars: `GIT_USER_EMAIL`, `GIT_USER_NAME`, `GITEE_DOMAIN_URL` |
 | [`.github/workflows/publish-dotnet-release.yml`](.github/workflows/publish-dotnet-release.yml) | .NET 语义化发布：计算版本、生成 changelog、可选更新 Version.props、发布 NuGet、构建并推送 Docker 镜像、创建 GitHub Release | `dotnet_version`, `version_props_path`, `nuget_source`, `docker_image_name`, `docker_platforms`, `docker_context` | `GITHUB_TOKEN`; NuGet: `NUGET_API_KEY`; Docker: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `DOCKERHUB_ORGANIZATION` |
+| [`.github/workflows/quality-dotnet.yml`](.github/workflows/quality-dotnet.yml) | .NET 质量检查：restore/build/test，可选 SonarQube Cloud 分析；启用 Sonar 时自动配置 Java 21 | `dotnet_version`, `solution_path`, `run_tests`, `sonar_project_key`, `sonar_organization`, `sonar_host_url` | `SONAR_TOKEN` |
+| [`.github/workflows/quality-vue.yml`](.github/workflows/quality-vue.yml) | Vue/TypeScript 质量检查：install/lint/typecheck/build/frontend check，可选 SonarQube Cloud 分析 | `node_version`, `pnpm_version`, `*_command`, `sonar_project_key`, `sonar_organization`, `sonar_host_url` | `SONAR_TOKEN` |
+| [`.github/workflows/sonar-issue-sync.yml`](.github/workflows/sonar-issue-sync.yml) | SonarQube Cloud 高危问题同步：将 `BLOCKER` / `CRITICAL` / `VULNERABILITY` 同步为当前仓库 GitHub Issue，并关闭已消失的同步 Issue | `sonar_project_key`, `sonar_organization`, `sonar_host_url`, `sonar_branch`, `github_repository` | `SONAR_TOKEN`, `GITHUB_TOKEN` |
 
 ## Sync 工作流行为
 

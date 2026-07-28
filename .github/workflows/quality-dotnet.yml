@@ -70,6 +70,13 @@ jobs:
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
 
+      - name: Setup Java for SonarScanner
+        if: ${{ inputs.sonar_project_key != '' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
       - name: Resolve solution
         id: solution
         shell: bash
