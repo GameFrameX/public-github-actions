@@ -67,6 +67,7 @@ jobs:
           sonar_org = os.environ.get("SONAR_ORGANIZATION", "gameframex")
           project_key = os.environ["SONAR_PROJECT_KEY"]
           branch = os.environ.get("SONAR_BRANCH", "main")
+          query_branch = "" if branch in ("", "main") else branch
           repository = os.environ["GH_REPOSITORY"]
 
           marker_re = re.compile(r"<!--\s*sonar-issue-key:\s*([A-Za-z0-9_-]+)\s*-->")
@@ -111,8 +112,8 @@ jobs:
                       "ps": "500",
                       "p": str(page),
                   }
-                  if branch:
-                      params["branch"] = branch
+                  if query_branch:
+                      params["branch"] = query_branch
                   params.update(extra_params)
                   url = f"{sonar_host}/api/issues/search?{urllib.parse.urlencode(params)}"
                   data = request_json(
