@@ -80,8 +80,9 @@ jobs:
           project_label = f"project:{repository_name}"
           allowed_severities = {"BLOCKER", "CRITICAL", "MAJOR", "MINOR", "INFO"}
 
-          group_marker_re = re.compile(r"<!--\s*sonar-issue-group:\s*([A-Za-z0-9_.:-]+)\s*-->")
+          file_marker_re = re.compile(r"<!--\s*sonar-issue-file:\s*([^>]+?)\s*-->")
           legacy_marker_re = re.compile(r"<!--\s*sonar-issue-key:\s*([A-Za-z0-9_-]+)\s*-->")
+          visible_file_re = re.compile(r"^File:\s*`([^`]+)`$", re.MULTILINE)
           project_marker = f"<!-- sonar-project-key: {project_key} -->"
           label_specs = {
               "sonar": "5319e7",
@@ -171,7 +172,7 @@ jobs:
                   })
 
           def list_open_sonar_issues():
-              groups = {}
+              files = {}
               legacy_keys = {}
               page = 1
               while True:
@@ -188,15 +189,14 @@ jobs:
                       if "pull_request" in item:
                           continue
                       body = item.get("body") or ""
-                      group_match = group_marker_re.search(body)
-                      if group_match:
-                          groups[group_match.group(1)] = item
-                          continue
+                      file_match = file_marker_re.search(body) or visible_file_re.search(body)
+                      if file_match:
+                          files.setdefault(file_match.group(1), []).append(item)
                       legacy_match = legacy_marker_re.search(body)
                       if legacy_match:
                           legacy_keys[legacy_match.group(1)] = item
                   page += 1
-              return groups, legacy_keys
+              return files, legacy_keys
 
           def sonar_issue_url(key):
               query = urllib.parse.urlencode({"open": key, "id": project_key})
@@ -218,14 +218,9 @@ jobs:
                   return component.split(":", 1)[1]
               return component or "unknown-location"
 
-          def group_category(issue):
-              if (issue.get("type") or "").upper() == "VULNERABILITY":
-                  return "security"
-              return "high-severity"
-
           def group_key_for(issue):
-              # ponytail: group by file and broad risk category; upgrade to root-cause grouping when a reliable dependency graph is available.
-              raw = f"{project_key}|{branch}|{group_category(issue)}|{component_path(issue)}"
+              # ponytail: group by file; upgrade to root-cause grouping when a reliable dependency graph is available.
+              raw = f"{project_key}|{branch}|{component_path(issue)}"
               return f"file:{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]}"
 
           def group_sonar_issues(issues):
@@ -234,7 +229,6 @@ jobs:
                   key = group_key_for(issue)
                   group = groups.setdefault(key, {
                       "key": key,
-                      "category": group_category(issue),
                       "path": component_path(issue),
                       "issues": [],
                   })
@@ -270,10 +264,9 @@ jobs:
               return "P2"
 
           def group_title(group):
-              risk = "Security" if group["category"] == "security" else "High Severity"
               path = group["path"]
               count = len(group["issues"])
-              title = f"{priority_prefix(group)} [Sonar][{risk}] Fix {path} ({count} issue{'s' if count != 1 else ''})"
+              title = f"{priority_prefix(group)} [Sonar] Fix {path} ({count} issue{'s' if count != 1 else ''})"
               return title[:240]
 
           def group_body(group):
@@ -284,15 +277,16 @@ jobs:
               rules = sorted({issue.get("rule", "UNKNOWN") for issue in issues})
               fields = [
                   f"<!-- sonar-issue-group: {group['key']} -->",
+                  f"<!-- sonar-issue-file: {group['path']} -->",
                   project_marker,
                   f"<!-- sonar-issue-keys: {','.join(keys)} -->",
                   "",
-                  "This GitHub Issue groups current SonarQube Cloud findings for one file and one broad risk category so the file can be fixed in a single pass.",
+                  "This GitHub Issue groups current SonarQube Cloud findings for one file so the file can be fixed in a single pass.",
                   "",
                   f"Project: `{project_key}`",
                   f"Branch: `{branch}`",
                   f"File: `{group['path']}`",
-                  f"Group: `{group['category']}`",
+                  f"Group: `file`",
                   f"Count: `{len(issues)}`",
                   f"Severities: `{', '.join(severities)}`",
                   f"Types: `{', '.join(issue_types)}`",
@@ -377,16 +371,14 @@ jobs:
                   },
               }
               groups = group_sonar_issues(sample)
-              assert len(groups) == 2, groups
-              high = next(group for group in groups.values() if group["category"] == "high-severity")
-              security = next(group for group in groups.values() if group["category"] == "security")
-              assert len(high["issues"]) == 2, high
-              assert len(security["issues"]) == 1, security
-              assert group_title(high).startswith("P0 [Sonar][High Severity]"), group_title(high)
-              assert "sonar:vulnerability" in group_labels(security), group_labels(security)
+              assert len(groups) == 1, groups
+              only = next(iter(groups.values()))
+              assert len(only["issues"]) == 3, only
+              assert group_title(only).startswith("P0 [Sonar]"), group_title(only)
+              assert "sonar:vulnerability" in group_labels(only), group_labels(only)
               assert project_label == "project:repo"
-              assert project_label in group_labels(high), group_labels(high)
-              assert desired_labels_for({"labels": [{"name": "project:old"}, {"name": "manual"}]}, group_labels(high)) == sorted(set(group_labels(high) + ["manual"]))
+              assert project_label in group_labels(only), group_labels(only)
+              assert desired_labels_for({"labels": [{"name": "project:old"}, {"name": "manual"}]}, group_labels(only)) == sorted(set(group_labels(only) + ["manual"]))
               assert normalize_severities("") == "BLOCKER,CRITICAL"
               assert normalize_severities(" critical, major,critical ") == "CRITICAL,MAJOR"
 
@@ -405,7 +397,8 @@ jobs:
           for name, color in label_specs.items():
               ensure_label(name, color)
 
-          existing_groups, legacy_issues = list_open_sonar_issues()
+          existing_files, legacy_issues = list_open_sonar_issues()
+          current_file_paths = {group["path"] for group in current_groups.values()}
           used_issue_numbers = set()
           created = updated = closed = unchanged = closed_superseded = 0
 
@@ -414,8 +407,8 @@ jobs:
               body = group_body(group)
               labels = group_labels(group)
               candidates = []
-              if group_key in existing_groups:
-                  candidates.append(existing_groups[group_key])
+              if group["path"] in existing_files:
+                  candidates.extend(existing_files[group["path"]])
               for issue in group["issues"]:
                   legacy_issue = legacy_issues.get(issue["key"])
                   if legacy_issue:
@@ -444,13 +437,23 @@ jobs:
                   })
                   created += 1
 
-          for group_key, gh_issue in sorted(existing_groups.items()):
-              if group_key in current_groups or gh_issue["number"] in used_issue_numbers:
+          for file_path, issues in sorted(existing_files.items()):
+              if file_path in current_file_paths:
+                  for gh_issue in issues:
+                      if gh_issue["number"] in used_issue_numbers:
+                          continue
+                      comment = f"SonarQube Cloud still reports file `{file_path}` for project `{project_key}` on branch `{branch}`, but this issue is a duplicate. Closing it."
+                      gh_api("POST", f"/repos/{repository}/issues/{gh_issue['number']}/comments", {"body": comment})
+                      close_issue(gh_issue)
+                      closed += 1
                   continue
-              comment = f"SonarQube Cloud no longer reports grouped issue `{group_key}` for project `{project_key}` on branch `{branch}`. Closing this synchronized issue."
-              gh_api("POST", f"/repos/{repository}/issues/{gh_issue['number']}/comments", {"body": comment})
-              close_issue(gh_issue)
-              closed += 1
+              for gh_issue in issues:
+                  if gh_issue["number"] in used_issue_numbers:
+                      continue
+                  comment = f"SonarQube Cloud no longer reports file `{file_path}` for project `{project_key}` on branch `{branch}`. Closing this synchronized issue."
+                  gh_api("POST", f"/repos/{repository}/issues/{gh_issue['number']}/comments", {"body": comment})
+                  close_issue(gh_issue)
+                  closed += 1
 
           for key, gh_issue in sorted(legacy_issues.items()):
               if key in current_keys or gh_issue["number"] in used_issue_numbers:
