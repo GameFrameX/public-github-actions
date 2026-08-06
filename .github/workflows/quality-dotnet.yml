@@ -43,6 +43,16 @@ on:
         required: false
         default: "GameFrameX"
         type: string
+      sonar_settings_path:
+        description: "Optional SonarScanner for .NET XML settings file path."
+        required: false
+        default: ""
+        type: string
+      sonar_exclusions:
+        description: "Comma-separated SonarQube exclusion patterns."
+        required: false
+        default: ""
+        type: string
     secrets:
       SONAR_TOKEN:
         required: false
@@ -106,6 +116,8 @@ jobs:
         shell: bash
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_SETTINGS_PATH: ${{ inputs.sonar_settings_path }}
+          SONAR_EXCLUSIONS: ${{ inputs.sonar_exclusions }}
         run: |
           set -euo pipefail
 
@@ -117,6 +129,20 @@ jobs:
 
           if [ -n "${{ inputs.sonar_organization }}" ]; then
             args+=("/o:${{ inputs.sonar_organization }}")
+          fi
+
+          sonar_settings_path="$(printf '%s' "$SONAR_SETTINGS_PATH" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -n "$sonar_settings_path" ]; then
+            if [ ! -f "$sonar_settings_path" ]; then
+              echo "Sonar settings file not found: $sonar_settings_path"
+              exit 1
+            fi
+            args+=("/s:$sonar_settings_path")
+          fi
+
+          sonar_exclusions="$(printf '%s' "$SONAR_EXCLUSIONS" | tr '\n' ',' | sed 's/,,*/,/g;s/^,//;s/,$//')"
+          if [ -n "$sonar_exclusions" ]; then
+            args+=("/d:sonar.exclusions=$sonar_exclusions")
           fi
 
           dotnet sonarscanner begin "${args[@]}"
