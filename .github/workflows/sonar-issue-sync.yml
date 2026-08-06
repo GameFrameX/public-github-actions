@@ -22,6 +22,11 @@ on:
         required: false
         default: "main"
         type: string
+      sonar_severities:
+        description: "Comma-separated SonarQube severities to sync"
+        required: false
+        default: "BLOCKER,CRITICAL"
+        type: string
       github_repository:
         description: "GitHub repository in owner/name format"
         required: false
@@ -49,13 +54,14 @@ jobs:
           SONAR_ORGANIZATION: ${{ inputs.sonar_organization }}
           SONAR_PROJECT_KEY: ${{ inputs.sonar_project_key }}
           SONAR_BRANCH: ${{ inputs.sonar_branch }}
+          SONAR_SEVERITIES: ${{ inputs.sonar_severities }}
           GH_REPOSITORY: ${{ inputs.github_repository || github.repository }}
         run: |
           python3 <<'PY'
+          import hashlib
           import json
           import os
           import re
-          import sys
           import time
           import urllib.error
           import urllib.parse
@@ -68,16 +74,24 @@ jobs:
           project_key = os.environ["SONAR_PROJECT_KEY"]
           branch = os.environ.get("SONAR_BRANCH", "main")
           query_branch = "" if branch in ("", "main") else branch
+          severity_filter = os.environ.get("SONAR_SEVERITIES", "BLOCKER,CRITICAL")
           repository = os.environ["GH_REPOSITORY"]
+          repository_name = repository.rsplit("/", 1)[-1].lower()
+          project_label = f"project:{repository_name}"
+          allowed_severities = {"BLOCKER", "CRITICAL", "MAJOR", "MINOR", "INFO"}
 
-          marker_re = re.compile(r"<!--\s*sonar-issue-key:\s*([A-Za-z0-9_-]+)\s*-->")
+          group_marker_re = re.compile(r"<!--\s*sonar-issue-group:\s*([A-Za-z0-9_.:-]+)\s*-->")
+          legacy_marker_re = re.compile(r"<!--\s*sonar-issue-key:\s*([A-Za-z0-9_-]+)\s*-->")
           project_marker = f"<!-- sonar-project-key: {project_key} -->"
           label_specs = {
               "sonar": "5319e7",
+              "sonar:grouped": "5319e7",
               "sonar:blocker": "b60205",
               "sonar:critical": "d93f0b",
               "sonar:vulnerability": "c44536",
+              project_label: "0e8a16",
           }
+          max_body_issues = 80
 
           def request_json(method, url, headers=None, data=None, retry=True):
               payload = None
@@ -157,7 +171,8 @@ jobs:
                   })
 
           def list_open_sonar_issues():
-              result = {}
+              groups = {}
+              legacy_keys = {}
               page = 1
               while True:
                   params = urllib.parse.urlencode({
@@ -172,81 +187,255 @@ jobs:
                   for item in items:
                       if "pull_request" in item:
                           continue
-                      match = marker_re.search(item.get("body") or "")
-                      if match:
-                          result[match.group(1)] = item
+                      body = item.get("body") or ""
+                      group_match = group_marker_re.search(body)
+                      if group_match:
+                          groups[group_match.group(1)] = item
+                          continue
+                      legacy_match = legacy_marker_re.search(body)
+                      if legacy_match:
+                          legacy_keys[legacy_match.group(1)] = item
                   page += 1
-              return result
+              return groups, legacy_keys
 
           def sonar_issue_url(key):
               query = urllib.parse.urlencode({"open": key, "id": project_key})
               return f"{sonar_host}/project/issues?{query}"
 
-          def issue_labels(issue):
-              labels = ["sonar"]
-              severity = (issue.get("severity") or "").lower()
-              issue_type = (issue.get("type") or "").lower()
-              if severity in ("blocker", "critical"):
-                  labels.append(f"sonar:{severity}")
-              if issue_type == "vulnerability":
+          def normalize_severities(value):
+              items = [item.strip().upper() for item in value.split(",") if item.strip()]
+              invalid = sorted(set(items) - allowed_severities)
+              if invalid:
+                  raise ValueError(f"Unsupported Sonar severities: {', '.join(invalid)}")
+              return ",".join(dict.fromkeys(items)) if items else "BLOCKER,CRITICAL"
+
+          def component_path(issue):
+              component = issue.get("component", "")
+              prefix = f"{project_key}:"
+              if component.startswith(prefix):
+                  return component[len(prefix):]
+              if ":" in component:
+                  return component.split(":", 1)[1]
+              return component or "unknown-location"
+
+          def group_category(issue):
+              if (issue.get("type") or "").upper() == "VULNERABILITY":
+                  return "security"
+              return "high-severity"
+
+          def group_key_for(issue):
+              # ponytail: group by file and broad risk category; upgrade to root-cause grouping when a reliable dependency graph is available.
+              raw = f"{project_key}|{branch}|{group_category(issue)}|{component_path(issue)}"
+              return f"file:{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:16]}"
+
+          def group_sonar_issues(issues):
+              groups = {}
+              for issue in issues.values():
+                  key = group_key_for(issue)
+                  group = groups.setdefault(key, {
+                      "key": key,
+                      "category": group_category(issue),
+                      "path": component_path(issue),
+                      "issues": [],
+                  })
+                  group["issues"].append(issue)
+              for group in groups.values():
+                  group["issues"].sort(key=lambda item: (
+                      component_path(item),
+                      int(item.get("line") or 0),
+                      item.get("rule") or "",
+                      item["key"],
+                  ))
+              return groups
+
+          def group_labels(group):
+              labels = ["sonar", "sonar:grouped", project_label]
+              severities = {(issue.get("severity") or "").lower() for issue in group["issues"]}
+              issue_types = {(issue.get("type") or "").lower() for issue in group["issues"]}
+              if "blocker" in severities:
+                  labels.append("sonar:blocker")
+              if "critical" in severities:
+                  labels.append("sonar:critical")
+              if "vulnerability" in issue_types:
                   labels.append("sonar:vulnerability")
               return labels
 
-          def issue_title(issue):
-              severity = issue.get("severity") or "UNKNOWN"
-              issue_type = issue.get("type") or "UNKNOWN"
-              message = (issue.get("message") or issue.get("rule") or issue["key"]).replace("\n", " ")
-              title = f"[Sonar][{severity}/{issue_type}] {message}"
+          def priority_prefix(group):
+              severities = {(issue.get("severity") or "").upper() for issue in group["issues"]}
+              issue_types = {(issue.get("type") or "").upper() for issue in group["issues"]}
+              if "VULNERABILITY" in issue_types or "BLOCKER" in severities:
+                  return "P0"
+              if "CRITICAL" in severities:
+                  return "P1"
+              return "P2"
+
+          def group_title(group):
+              risk = "Security" if group["category"] == "security" else "High Severity"
+              path = group["path"]
+              count = len(group["issues"])
+              title = f"{priority_prefix(group)} [Sonar][{risk}] Fix {path} ({count} issue{'s' if count != 1 else ''})"
               return title[:240]
 
-          def issue_body(issue):
-              component = issue.get("component", "")
-              line = issue.get("line")
-              location = f"{component}:{line}" if line else component
+          def group_body(group):
+              issues = group["issues"]
+              keys = [issue["key"] for issue in issues]
+              severities = sorted({issue.get("severity", "UNKNOWN") for issue in issues})
+              issue_types = sorted({issue.get("type", "UNKNOWN") for issue in issues})
+              rules = sorted({issue.get("rule", "UNKNOWN") for issue in issues})
               fields = [
-                  f"<!-- sonar-issue-key: {issue['key']} -->",
+                  f"<!-- sonar-issue-group: {group['key']} -->",
                   project_marker,
+                  f"<!-- sonar-issue-keys: {','.join(keys)} -->",
                   "",
-                  f"Sonar issue: [{issue['key']}]({sonar_issue_url(issue['key'])})",
+                  "This GitHub Issue groups current SonarQube Cloud findings for one file and one broad risk category so the file can be fixed in a single pass.",
+                  "",
                   f"Project: `{project_key}`",
                   f"Branch: `{branch}`",
-                  f"Severity: `{issue.get('severity', 'UNKNOWN')}`",
-                  f"Type: `{issue.get('type', 'UNKNOWN')}`",
-                  f"Rule: `{issue.get('rule', 'UNKNOWN')}`",
-                  f"Location: `{location}`",
+                  f"File: `{group['path']}`",
+                  f"Group: `{group['category']}`",
+                  f"Count: `{len(issues)}`",
+                  f"Severities: `{', '.join(severities)}`",
+                  f"Types: `{', '.join(issue_types)}`",
+                  f"Rules: `{', '.join(rules)}`",
                   "",
-                  "Message:",
-                  issue.get("message", ""),
+                  "Findings:",
               ]
+              for issue in issues[:max_body_issues]:
+                  line = issue.get("line")
+                  location = f"{group['path']}:{line}" if line else group["path"]
+                  message = (issue.get("message") or "").replace("\n", " ")
+                  fields.append(
+                      f"- [{issue['key']}]({sonar_issue_url(issue['key'])}) - "
+                      f"`{issue.get('severity', 'UNKNOWN')}/{issue.get('type', 'UNKNOWN')}` - "
+                      f"`{issue.get('rule', 'UNKNOWN')}` - `{location}` - {message}"
+                  )
+              hidden_count = len(issues) - max_body_issues
+              if hidden_count > 0:
+                  fields.extend([
+                      "",
+                      f"{hidden_count} additional finding(s) are still tracked in the hidden sonar-issue-keys marker above.",
+                  ])
+              fields.extend([
+                  "",
+                  "Acceptance:",
+                  "- Fix all listed current Sonar findings in this file.",
+                  "- Keep the existing public API unchanged unless the finding requires a contract change.",
+                  "- Rerun the repository quality workflow and verify Sonar no longer reports these keys.",
+              ])
               return "\n".join(fields)
 
-          blocker_or_critical = sonar_search({"severities": "BLOCKER,CRITICAL"})
+          def desired_labels_for(gh_issue, sonar_labels):
+              current_labels = sorted(label["name"] for label in gh_issue.get("labels", []))
+              preserved_labels = [
+                  name for name in current_labels
+                  if not name.startswith("sonar") and not name.startswith("project:")
+              ]
+              return sorted(set(sonar_labels + preserved_labels))
+
+          def update_issue_if_needed(gh_issue, title, body, labels):
+              current_labels = sorted(label["name"] for label in gh_issue.get("labels", []))
+              if gh_issue.get("title") == title and (gh_issue.get("body") or "") == body and current_labels == labels:
+                  return False
+              gh_api("PATCH", f"/repos/{repository}/issues/{gh_issue['number']}", {
+                  "title": title,
+                  "body": body,
+                  "labels": labels,
+              })
+              return True
+
+          def close_issue(gh_issue):
+              gh_api("PATCH", f"/repos/{repository}/issues/{gh_issue['number']}", {"state": "closed"})
+
+          def run_self_test():
+              sample = {
+                  "A": {
+                      "key": "A",
+                      "component": f"{project_key}:src/Foo.cs",
+                      "line": 10,
+                      "severity": "CRITICAL",
+                      "type": "CODE_SMELL",
+                      "rule": "csharpsquid:S1",
+                      "message": "First",
+                  },
+                  "B": {
+                      "key": "B",
+                      "component": f"{project_key}:src/Foo.cs",
+                      "line": 20,
+                      "severity": "BLOCKER",
+                      "type": "BUG",
+                      "rule": "csharpsquid:S2",
+                      "message": "Second",
+                  },
+                  "C": {
+                      "key": "C",
+                      "component": f"{project_key}:src/Foo.cs",
+                      "line": 30,
+                      "severity": "CRITICAL",
+                      "type": "VULNERABILITY",
+                      "rule": "csharpsquid:S3",
+                      "message": "Third",
+                  },
+              }
+              groups = group_sonar_issues(sample)
+              assert len(groups) == 2, groups
+              high = next(group for group in groups.values() if group["category"] == "high-severity")
+              security = next(group for group in groups.values() if group["category"] == "security")
+              assert len(high["issues"]) == 2, high
+              assert len(security["issues"]) == 1, security
+              assert group_title(high).startswith("P0 [Sonar][High Severity]"), group_title(high)
+              assert "sonar:vulnerability" in group_labels(security), group_labels(security)
+              assert project_label == "project:repo"
+              assert project_label in group_labels(high), group_labels(high)
+              assert desired_labels_for({"labels": [{"name": "project:old"}, {"name": "manual"}]}, group_labels(high)) == sorted(set(group_labels(high) + ["manual"]))
+              assert normalize_severities("") == "BLOCKER,CRITICAL"
+              assert normalize_severities(" critical, major,critical ") == "CRITICAL,MAJOR"
+
+          if os.environ.get("SONAR_ISSUE_SYNC_SELF_TEST") == "1":
+              run_self_test()
+              print("Sonar issue grouping self-test passed")
+              raise SystemExit(0)
+
+          severities = normalize_severities(severity_filter)
+          severity_issues = sonar_search({"severities": severities})
           vulnerabilities = sonar_search({"types": "VULNERABILITY"})
-          current = {**blocker_or_critical, **vulnerabilities}
+          current = {**severity_issues, **vulnerabilities}
+          current_groups = group_sonar_issues(current)
+          current_keys = set(current)
 
           for name, color in label_specs.items():
               ensure_label(name, color)
 
-          existing = list_open_sonar_issues()
-          created = updated = closed = unchanged = 0
+          existing_groups, legacy_issues = list_open_sonar_issues()
+          used_issue_numbers = set()
+          created = updated = closed = unchanged = closed_superseded = 0
 
-          for key, issue in sorted(current.items()):
-              title = issue_title(issue)
-              body = issue_body(issue)
-              labels = issue_labels(issue)
-              if key in existing:
-                  gh_issue = existing[key]
-                  current_labels = sorted(label["name"] for label in gh_issue.get("labels", []))
-                  desired_labels = sorted(set(labels + [name for name in current_labels if not name.startswith("sonar")]))
-                  if gh_issue.get("title") != title or (gh_issue.get("body") or "") != body or current_labels != desired_labels:
-                      gh_api("PATCH", f"/repos/{repository}/issues/{gh_issue['number']}", {
-                          "title": title,
-                          "body": body,
-                          "labels": desired_labels,
-                      })
+          for group_key, group in sorted(current_groups.items(), key=lambda item: item[1]["path"]):
+              title = group_title(group)
+              body = group_body(group)
+              labels = group_labels(group)
+              candidates = []
+              if group_key in existing_groups:
+                  candidates.append(existing_groups[group_key])
+              for issue in group["issues"]:
+                  legacy_issue = legacy_issues.get(issue["key"])
+                  if legacy_issue:
+                      candidates.append(legacy_issue)
+
+              unique_candidates = {candidate["number"]: candidate for candidate in candidates}
+              if unique_candidates:
+                  gh_issue = unique_candidates[min(unique_candidates)]
+                  used_issue_numbers.add(gh_issue["number"])
+                  desired_labels = desired_labels_for(gh_issue, labels)
+                  if update_issue_if_needed(gh_issue, title, body, desired_labels):
                       updated += 1
                   else:
                       unchanged += 1
+                  for number, duplicate in sorted(unique_candidates.items()):
+                      if number == gh_issue["number"]:
+                          continue
+                      close_issue(duplicate)
+                      used_issue_numbers.add(number)
+                      closed_superseded += 1
               else:
                   gh_api("POST", f"/repos/{repository}/issues", {
                       "title": title,
@@ -255,13 +444,26 @@ jobs:
                   })
                   created += 1
 
-          for key, gh_issue in sorted(existing.items()):
-              if key in current:
+          for group_key, gh_issue in sorted(existing_groups.items()):
+              if group_key in current_groups or gh_issue["number"] in used_issue_numbers:
+                  continue
+              comment = f"SonarQube Cloud no longer reports grouped issue `{group_key}` for project `{project_key}` on branch `{branch}`. Closing this synchronized issue."
+              gh_api("POST", f"/repos/{repository}/issues/{gh_issue['number']}/comments", {"body": comment})
+              close_issue(gh_issue)
+              closed += 1
+
+          for key, gh_issue in sorted(legacy_issues.items()):
+              if key in current_keys or gh_issue["number"] in used_issue_numbers:
                   continue
               comment = f"SonarQube Cloud no longer reports `{key}` for project `{project_key}` on branch `{branch}`. Closing this synchronized issue."
               gh_api("POST", f"/repos/{repository}/issues/{gh_issue['number']}/comments", {"body": comment})
-              gh_api("PATCH", f"/repos/{repository}/issues/{gh_issue['number']}", {"state": "closed"})
+              close_issue(gh_issue)
               closed += 1
 
-          print(f"Sonar issue sync complete: created={created}, updated={updated}, unchanged={unchanged}, closed={closed}, current={len(current)}")
+          print(
+              "Sonar issue sync complete: "
+              f"created={created}, updated={updated}, unchanged={unchanged}, "
+              f"closed={closed}, closed_superseded={closed_superseded}, "
+              f"current={len(current)}, current_groups={len(current_groups)}"
+          )
           PY
