@@ -49,9 +49,9 @@ on:
         default: ""
         type: string
       sonar_exclusions:
-        description: "Comma-separated SonarQube exclusion patterns."
+        description: "Comma-separated SonarQube exclusion patterns. Defaults to exclude the .github workflow directory."
         required: false
-        default: ""
+        default: ".github/**"
         type: string
     secrets:
       SONAR_TOKEN:
