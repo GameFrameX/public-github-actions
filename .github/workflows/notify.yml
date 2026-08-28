@@ -1,0 +1,77 @@
+name: Reusable Release Notify Workflow
+
+# Release 后自动发 Bluesky 帖（中英双语）。
+# 设计说明：
+# - publish-dotnet-release 每次 push main 都会跑，但 semantic-release 只在必要时建 Release；
+#   本流程用「最新 Release 的发布时间 < 1 小时」判定是否有新版本，避免重复发帖。
+# - secrets.BLUESKY_APP_PASSWORD 缺失时优雅跳过（日志提示），账号注册后配好即生效。
+# 依赖（调用方仓库）：
+#   - secret  BLUESKY_APP_PASSWORD —— Bluesky App Password
+#   - variable BLUESKY_HANDLE —— 账号 handle（如 gameframex.bsky.social）
+
+on:
+  workflow_call:
+    inputs:
+      repository_name:
+        description: '仓库名（发帖文案用），如 GameFrameX.Server'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  bluesky:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for fresh release
+        id: release
+        env:
+          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+        run: |
+          rel=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName,publishedAt,url 2>/dev/null || echo '')
+          if [ -z "$rel" ]; then
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+            echo "no release exists, skip"
+            exit 0
+          fi
+          published=$(echo "$rel" | jq -r .publishedAt)
+          age=$(( $(date +%s) - $(date -d "$published" +%s) ))
+          if [ "$age" -lt 3600 ]; then
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$(echo "$rel" | jq -r .tagName)" >> "$GITHUB_OUTPUT"
+            echo "url=$(echo "$rel" | jq -r .url)" >> "$GITHUB_OUTPUT"
+          else
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+            echo "latest release is $(( age / 3600 ))h old, nothing new to announce"
+          fi
+
+      - name: Post to Bluesky
+        if: steps.release.outputs.fresh == 'true'
+        env:
+          BLUESKY_HANDLE: "${{ vars.BLUESKY_HANDLE }}"
+          BLUESKY_APP_PASSWORD: "${{ secrets.BLUESKY_APP_PASSWORD }}"
+          TAG: "${{ steps.release.outputs.tag }}"
+          URL: "${{ steps.release.outputs.url }}"
+          REPO: "${{ inputs.repository_name }}"
+        run: |
+          if [ -z "$BLUESKY_APP_PASSWORD" ] || [ -z "$BLUESKY_HANDLE" ]; then
+            echo "Bluesky credentials not configured (secret BLUESKY_APP_PASSWORD / variable BLUESKY_HANDLE), skip posting."
+            exit 0
+          fi
+
+          text="🚀 ${REPO} ${TAG} released!\n\n${URL}"
+          # Bluesky 帖子上限 300 graphemes，双语文案保持精简
+          created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          session=$(curl -sf -X POST "https://bsky.social/xrpc/com.atproto.server.createSession" \
+            -H 'Content-Type: application/json' \
+            -d "{\"identifier\":\"$BLUESKY_HANDLE\",\"password\":\"$BLUESKY_APP_PASSWORD\"}")
+          jwt=$(echo "$session" | jq -r .accessJwt)
+          did=$(echo "$session" | jq -r .did)
+
+          curl -sf -X POST "https://bsky.social/xrpc/com.atproto.repo.createRecord" \
+            -H "Authorization: Bearer $jwt" \
+            -H 'Content-Type: application/json' \
+            -d "{\"collection\":\"app.bsky.feed.post\",\"repo\":\"$did\",\"record\":{\"\$type\":\"app.bsky.feed.post\",\"createdAt\":\"$created\",\"text\":\"$text\"}}" > /dev/null
+          echo "posted to Bluesky: $text"
