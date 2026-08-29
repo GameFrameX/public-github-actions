@@ -72,3 +72,15 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.CNB_NPM_TOKEN }}
           # GitHub令牌（自动生成，用于创建Tag/Release）
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 发版成功后通知主项目（GameFrameX.Unity）触发 manifest 依赖更新；未配置令牌时静默跳过
+      - name: Notify main project to bump packages
+        env:
+          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        if: env.DISPATCH_TOKEN != ''
+        run: |
+          curl -sS -f -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $DISPATCH_TOKEN" \
+            -d '{"event_type":"package-released"}' \
+            https://api.github.com/repos/GameFrameX/GameFrameX.Unity/dispatches
