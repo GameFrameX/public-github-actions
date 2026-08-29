@@ -1,0 +1,51 @@
+name: Reusable Update Packages Workflow
+
+on:
+  workflow_call:
+    inputs:
+      repository_name:
+        description: '调用方仓库名（owner/repo），仅用于日志标识'
+        required: false
+        type: string
+        default: ''
+
+# 统一配置权限，调用方无需声明
+permissions:
+  contents: write
+
+jobs:
+  bump-manifest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+
+      # 下载共享更新脚本（与 .releaserc 同一分发方式）
+      - name: Download update script
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/GameFrameX/public-github-actions/main/scripts/update-gameframex-packages.mjs -o update-gameframex-packages.mjs
+
+      - name: Bump manifest versions
+        id: bump
+        run: |
+          node update-gameframex-packages.mjs | tee /tmp/changes.txt
+          if grep -q '^NO_CHANGES$' /tmp/changes.txt; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Packages/manifest.json
+          printf 'chore(deps): bump gameframex packages\n\n%s\n' "$(cat /tmp/changes.txt)" | git commit -F -
+          git push
