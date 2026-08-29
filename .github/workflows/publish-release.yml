@@ -79,8 +79,13 @@ jobs:
           DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
         if: env.DISPATCH_TOKEN != ''
         run: |
-          curl -sS -f -X POST \
+          code=$(curl -sS -o /tmp/dispatch-resp.json -w "%{http_code}" -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $DISPATCH_TOKEN" \
             -d '{"event_type":"package-released"}' \
-            https://api.github.com/repos/GameFrameX/GameFrameX.Unity/dispatches
+            https://api.github.com/repos/GameFrameX/GameFrameX.Unity/dispatches)
+          if [ "$code" != "204" ]; then
+            echo "dispatch failed: HTTP $code"
+            cat /tmp/dispatch-resp.json
+            exit 1
+          fi
