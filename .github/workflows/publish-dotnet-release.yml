@@ -255,7 +255,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ---- Bluesky 发布通知（与 notify.yml 逻辑保持一致，改动需两处同步）----
+  # ---- Bluesky 发布通知（与 notify.yml / publish-release.yml 逻辑保持一致，改动需三处同步）----
   # 内嵌于此：所有走本公共流水线的仓零接入成本获得通知；
   # 独立发布流水线的仓（如 Foundation）用 notify.yml 薄调用。
   notify:

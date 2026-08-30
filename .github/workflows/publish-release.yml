@@ -72,3 +72,64 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.CNB_NPM_TOKEN }}
           # GitHub令牌（自动生成，用于创建Tag/Release）
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---- Bluesky 发布通知（与 notify.yml / publish-dotnet-release.yml 逻辑保持一致，改动需三处同步）----
+  # 内嵌于此：所有走本公共流水线的仓零接入成本获得通知；
+  # 独立发布流水线的仓（如 Foundation）用 notify.yml 薄调用。
+  notify:
+    needs: publish-release
+    if: needs.publish-release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check for fresh release
+        id: release
+        env:
+          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+        run: |
+          rel=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName,publishedAt,url 2>/dev/null || echo '')
+          if [ -z "$rel" ]; then
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+            echo "no release exists, skip"
+            exit 0
+          fi
+          published=$(echo "$rel" | jq -r .publishedAt)
+          age=$(( $(date +%s) - $(date -d "$published" +%s) ))
+          if [ "$age" -lt 3600 ]; then
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$(echo "$rel" | jq -r .tagName)" >> "$GITHUB_OUTPUT"
+            echo "url=$(echo "$rel" | jq -r .url)" >> "$GITHUB_OUTPUT"
+          else
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+            echo "latest release is $(( age / 3600 ))h old, nothing new to announce"
+          fi
+
+      - name: Post to Bluesky
+        if: steps.release.outputs.fresh == 'true'
+        env:
+          BLUESKY_HANDLE: "${{ vars.BLUESKY_HANDLE }}"
+          BLUESKY_APP_PASSWORD: "${{ secrets.BLUESKY_APP_PASSWORD }}"
+          TAG: "${{ steps.release.outputs.tag }}"
+          URL: "${{ steps.release.outputs.url }}"
+          REPO: "${{ github.repository }}"
+        run: |
+          if [ -z "$BLUESKY_APP_PASSWORD" ] || [ -z "$BLUESKY_HANDLE" ]; then
+            echo "Bluesky credentials not configured (secret BLUESKY_APP_PASSWORD / variable BLUESKY_HANDLE), skip posting."
+            exit 0
+          fi
+
+          text="🚀 ${REPO} ${TAG} released!\n\n${URL}"
+          created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          session=$(curl -sf -X POST "https://bsky.social/xrpc/com.atproto.server.createSession" \
+            -H 'Content-Type: application/json' \
+            -d "{\"identifier\":\"$BLUESKY_HANDLE\",\"password\":\"$BLUESKY_APP_PASSWORD\"}")
+          jwt=$(echo "$session" | jq -r .accessJwt)
+          did=$(echo "$session" | jq -r .did)
+
+          curl -sf -X POST "https://bsky.social/xrpc/com.atproto.repo.createRecord" \
+            -H "Authorization: Bearer $jwt" \
+            -H 'Content-Type: application/json' \
+            -d "{\"collection\":\"app.bsky.feed.post\",\"repo\":\"$did\",\"record\":{\"\$type\":\"app.bsky.feed.post\",\"createdAt\":\"$created\",\"text\":\"$text\"}}" > /dev/null
+          echo "posted to Bluesky: $text"
