@@ -169,7 +169,7 @@ jobs:
         run: git remote add mirror "git@${{ vars.GITEE_DOMAIN_URL }}:${{ inputs.repository_name }}.git"
 
       - name: Fetch
-        run: git fetch --prune mirror --tags --verbose
+        run: git fetch --prune mirror --verbose # 不 fetch tags：本地 tag 为权威来源，镜像 tag 落后时避免 clobber 报错
 
       - name: Pull and push
         run: |
