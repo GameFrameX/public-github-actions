@@ -312,5 +312,5 @@ jobs:
           PLUGIN_USERNAME: "cnb"
           PLUGIN_PASSWORD: ${{ secrets.CNB_SYNC_TOKEN }}
           PLUGIN_FORCE: "true"
-          PLUGIN_SYNC_MODE: "rebase"
+          PLUGIN_SYNC_MODE: "push" # rebase 模式在镜像 tag 落后时会因 clobber 失败，纯镜像无需保留目标特有文件
           PLUGIN_PUSH_TAGS: "true"
