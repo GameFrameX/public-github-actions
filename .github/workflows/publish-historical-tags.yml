@@ -53,10 +53,15 @@ jobs:
             echo "=== Publishing tag: $tag ==="
             git checkout "$tag"
 
-            npm pkg fix
+            if [ ! -f package.json ]; then
+              echo "::warning::No root package.json at $tag (legacy layout), skipping..."
+              continue
+            fi
+
+            npm pkg fix || true
 
             pkg_name='${{ github.event.repository.name }}'
-            node -e "let pkg=require('./package.json'); pkg.name='$pkg_name'; require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2))"
+            node -e "let pkg=require('./package.json'); pkg.name='$pkg_name'; require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2))" || true
             echo "Set package name to: $pkg_name"
 
             if npm publish --force 2>&1; then
