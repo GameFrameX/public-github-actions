@@ -37,9 +37,13 @@ jobs:
           git config --global user.email "${{ vars.GIT_USER_EMAIL }}"
           git config --global user.name "${{ vars.GIT_USER_NAME }}"
 
-      # 解决 git fetch 报错
+      # 解决 git fetch 报错；私有仓库需先经 gh 配置 git 凭据才能拉取
       - name: Force fetch tags
-        run: git fetch --tags --force
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh auth setup-git
+          git fetch --tags --force
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
