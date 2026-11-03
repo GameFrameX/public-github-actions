@@ -33,6 +33,11 @@ on:
         required: false
         type: string
         default: public
+      skip_lfs:
+        description: '推送镜像时跳过 Git LFS 对象上传（镜像端不支持 LFS 时使用，如 Gitee 免费版）'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   sync-to-gitee:
@@ -172,6 +177,9 @@ jobs:
         run: git fetch --prune mirror --verbose # 不 fetch tags：本地 tag 为权威来源，镜像 tag 落后时避免 clobber 报错
 
       - name: Pull and push
+        env:
+          # Gitee 免费版不支持 LFS：跳过 pre-push 钩子的 LFS 上传，仅推送普通 git 对象
+          GIT_LFS_SKIP_PUSH: ${{ inputs.skip_lfs && '1' || '0' }}
         run: |
           if [ "${{ inputs.target_branch }}" ]; then
             git checkout ${{ inputs.target_branch }}
@@ -314,3 +322,5 @@ jobs:
           PLUGIN_FORCE: "true"
           PLUGIN_SYNC_MODE: "push" # rebase 模式在镜像 tag 落后时会因 clobber 失败，纯镜像无需保留目标特有文件
           PLUGIN_PUSH_TAGS: "true"
+          # 与 Gitee 同理：镜像端无 LFS 服务时跳过 LFS 对象上传，只同步普通 git 对象
+          GIT_LFS_SKIP_PUSH: ${{ inputs.skip_lfs && '1' || '0' }}
