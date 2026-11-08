@@ -1,0 +1,64 @@
+name: Publish NuGet packages with Trusted Publishing
+description: Exchange the caller workflow OIDC token for a short-lived NuGet key and publish package files.
+
+inputs:
+  package-path:
+    description: Glob pattern for the .nupkg files to publish.
+    required: true
+  nuget-user:
+    description: NuGet.org profile username associated with the Trusted Publishing policy.
+    required: true
+  dotnet-version:
+    description: .NET SDK used for the NuGet push command.
+    required: false
+    default: 10.0.x
+
+runs:
+  using: composite
+  steps:
+    - name: Validate package files
+      shell: bash
+      env:
+        PACKAGE_PATH: ${{ inputs.package-path }}
+      run: |
+        shopt -s nullglob
+        packages=( $PACKAGE_PATH )
+        if (( ${#packages[@]} == 0 )); then
+          echo "No NuGet packages matched: $PACKAGE_PATH" >&2
+          exit 1
+        fi
+
+        for package in "${packages[@]}"; do
+          if [[ ! -f "$package" || "$package" != *.nupkg || "$package" == *.symbols.nupkg ]]; then
+            echo "Invalid NuGet package path: $package" >&2
+            exit 1
+          fi
+        done
+
+        printf 'Validated %s NuGet package(s).\n' "${#packages[@]}"
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: ${{ inputs.dotnet-version }}
+
+    - name: NuGet login through OIDC
+      uses: NuGet/login@v1.2.0
+      id: nuget-login
+      with:
+        user: ${{ inputs.nuget-user }}
+
+    - name: Push packages to NuGet.org
+      shell: bash
+      env:
+        PACKAGE_PATH: ${{ inputs.package-path }}
+        NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+      run: |
+        shopt -s nullglob
+        packages=( $PACKAGE_PATH )
+        for package in "${packages[@]}"; do
+          dotnet nuget push "$package" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+        done

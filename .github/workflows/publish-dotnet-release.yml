@@ -14,11 +14,6 @@ on:
         required: false
         default: ''
         type: string
-      nuget_source:
-        description: 'NuGet package source URL'
-        required: false
-        default: 'https://api.nuget.org/v3/index.json'
-        type: string
       # Docker 选项
       docker_image_name:
         description: 'Docker image name (e.g. gameframex-tools). Leave empty to skip Docker build.'
@@ -35,6 +30,13 @@ on:
         required: false
         default: '.'
         type: string
+    outputs:
+      release_needed:
+        description: Whether this run generated a new release.
+        value: ${{ jobs.release.outputs.release_needed }}
+      nuget_packages:
+        description: Whether this run produced NuGet packages for publishing.
+        value: ${{ jobs.release.outputs.nuget_packages }}
 
 # 统一配置权限，调用方无需声明
 permissions:
@@ -46,6 +48,8 @@ jobs:
     if: ${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release)') }}
     outputs:
       previous_tag: ${{ steps.pre_release.outputs.tag }}
+      release_needed: ${{ steps.check.outputs.need_release }}
+      nuget_packages: ${{ steps.pack.outcome == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -195,11 +199,17 @@ jobs:
 
       - name: Pack NuGet packages
         if: steps.check.outputs.need_release == 'true' && inputs.version_props_path != ''
+        id: pack
         run: dotnet pack --configuration Release --no-build --output ./artifacts
 
-      - name: Publish to NuGet
+      - name: Upload NuGet packages
         if: steps.check.outputs.need_release == 'true' && inputs.version_props_path != ''
-        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source ${{ inputs.nuget_source }} --skip-duplicate
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuget-packages
+          path: ./artifacts/*.nupkg
+          if-no-files-found: error
+          retention-days: 7
 
       # ---- Docker 发布（可选） ----
 

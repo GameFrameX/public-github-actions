@@ -39,7 +39,8 @@ jobs:
 | [`.github/workflows/publish-release.yml`](.github/workflows/publish-release.yml) | Unity/通用仓库发布：下载共享 `.releaserc`，在 `main` 分支运行 semantic-release，生成 changelog、tag、GitHub Release，并可发布到 CNB npm | `tag_name`, `repository_name` | `GITHUB_TOKEN`, `CNB_NPM_TOKEN` |
 | [`.github/workflows/publish-historical-tags.yml`](.github/workflows/publish-historical-tags.yml) | 手动或自动枚举历史语义化 tag，并逐个执行 `npm publish` 到 CNB npm | `tags` | `CNB_NPM_TOKEN` |
 | [`.github/workflows/sync.yml`](.github/workflows/sync.yml) | 双 Job 镜像同步：自动读取 GitHub 仓库元数据，按需创建 Gitee/CNB 仓库，同步描述、站点、主题，并推送代码和 tags | `target_branch`, `repository_name` | `GITHUB_TOKEN`; Gitee: `GITEE_GITHUB_ACTION_SYNC_TOKEN`, `GITEE_ID_RSA`; CNB: `CNB_SYNC_TOKEN`; Vars: `GIT_USER_EMAIL`, `GIT_USER_NAME`, `GITEE_DOMAIN_URL` |
-| [`.github/workflows/publish-dotnet-release.yml`](.github/workflows/publish-dotnet-release.yml) | .NET 语义化发布：计算版本、生成 changelog、可选更新 Version.props、发布 NuGet、构建并推送 Docker 镜像、创建 GitHub Release | `dotnet_version`, `version_props_path`, `nuget_source`, `docker_image_name`, `docker_platforms`, `docker_context` | `GITHUB_TOKEN`; NuGet: `NUGET_API_KEY`; Docker: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `DOCKERHUB_ORGANIZATION` |
+| [`.github/workflows/publish-dotnet-release.yml`](.github/workflows/publish-dotnet-release.yml) | .NET 语义化发布：计算版本、生成 changelog、可选更新 Version.props、构建并上传 NuGet artifact、构建并推送 Docker 镜像、创建 GitHub Release | `dotnet_version`, `version_props_path`, `docker_image_name`, `docker_platforms`, `docker_context`; Outputs: `release_needed`, `nuget_packages` | `GITHUB_TOKEN`; Docker: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `DOCKERHUB_ORGANIZATION` |
+| [`.github/actions/publish-nuget/action.yml`](.github/actions/publish-nuget/action.yml) | 在调用仓库本地 job 中通过 OIDC 获取短时 NuGet 凭证并发布包 | `package-path`, `nuget-user` | Caller job: `id-token: write`; Secret: `NUGET_USER` |
 | [`.github/workflows/quality-dotnet.yml`](.github/workflows/quality-dotnet.yml) | .NET 质量检查：restore/build/test，可选 SonarQube Cloud 分析；启用 Sonar 时自动配置 Java 21 | `dotnet_version`, `solution_path`, `run_tests`, `sonar_project_key`, `sonar_organization`, `sonar_host_url` | `SONAR_TOKEN` |
 | [`.github/workflows/quality-vue.yml`](.github/workflows/quality-vue.yml) | Vue/TypeScript 质量检查：install/lint/typecheck/build/frontend check，可选 SonarQube Cloud 分析 | `node_version`, `pnpm_version`, `*_command`, `sonar_project_key`, `sonar_organization`, `sonar_host_url` | `SONAR_TOKEN` |
 | [`.github/workflows/sonar-issue-sync.yml`](.github/workflows/sonar-issue-sync.yml) | SonarQube Cloud 高危问题同步：将 `BLOCKER` / `CRITICAL` / `VULNERABILITY` 同步为当前仓库 GitHub Issue，并关闭已消失的同步 Issue | `sonar_project_key`, `sonar_organization`, `sonar_host_url`, `sonar_branch`, `github_repository` | `SONAR_TOKEN`, `GITHUB_TOKEN` |
@@ -115,7 +116,7 @@ jobs:
 按需配置：
 
 - `CNB_NPM_TOKEN`
-- `NUGET_API_KEY`
+- `NUGET_USER`：NuGet.org 用户资料名，不是邮箱，也不是 API key；可设置为组织级 secret。
 - `DOCKERHUB_USERNAME`
 - `DOCKERHUB_TOKEN`
 - `DOCKERHUB_ORGANIZATION`
@@ -158,6 +159,8 @@ jobs:
 ```
 
 ### .NET 包发布
+
+共享 workflow 只构建并上传 NuGet artifact。NuGet OIDC 登录和推送应放在包仓库的本地 job 中，以便 Trusted Publishing policy 校验根 workflow 身份。详见 [NuGet Trusted Publishing](docs/nuget-trusted-publishing.md)。
 
 ```yaml
 name: Release
