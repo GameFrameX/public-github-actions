@@ -24,10 +24,9 @@
 | --- | --- |
 | `GameFrameX.Server.Source` | `release.yml` |
 | `GameFrameX.SuperSocket` | `release.yml` |
-| `GameFrameX.SuperSocket` | `publish-nuget.yml` |
 | `GameFrameX.Foundation` | `release.yml` |
 
-每个独立根 workflow 都要单独配置 policy。确认 NuGet 包的实际 Package Owner 后，再为该 owner 配置对应规则。
+组织内统一使用 `release.yml` 作为 NuGet 发布根 workflow。每个仓库仍需在 NuGet.org 单独配置 policy，因为 Repository identity 必须精确匹配；同一仓库内不同触发方式（手动发布与 tag 发布）可由同一个 `release.yml` 处理。确认 NuGet 包的实际 Package Owner 后，再为该 owner 配置对应规则。
 
 ## 调用方式
 
@@ -53,7 +52,7 @@
           nuget-user: ${{ secrets.NUGET_USER }}
 ```
 
-Tag-triggered workflow 也应拆分构建/artifact 上传与本地 OIDC 发布两个 job。
+tag 触发也应在同一个 `release.yml` 中拆分构建/artifact 上传与本地 OIDC 发布两个 job，避免新增第二个根 workflow policy。
 
 ## 迁移验收
 
